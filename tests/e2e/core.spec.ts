@@ -61,6 +61,50 @@ test("continuous keyboard input stays responsive and persists after the debounce
   );
 });
 
+test("task title uses immediate mobile touch targeting", async ({ page }) => {
+  await page.goto("/today");
+  const title = page
+    .getByTestId("daily-slot-1")
+    .getByPlaceholder("今天真正重要的是什么？");
+
+  expect(
+    await title.evaluate((element) => getComputedStyle(element).touchAction),
+  ).toBe("manipulation");
+  await title.click();
+  expect(
+    await title.evaluate((element) => document.activeElement === element),
+  ).toBe(true);
+});
+
+test("multiple exercise sessions persist independently on the same day", async ({
+  page,
+}) => {
+  await page.goto("/today");
+  await expect(page.getByTestId(/^daily-slot-/)).toHaveCount(6);
+  const add = page.getByTestId("add-exercise");
+  await add.click();
+  await expect(page.getByTestId("exercise-log")).toHaveCount(1);
+  await add.click();
+
+  const logs = page.getByTestId("exercise-log");
+  await expect(logs).toHaveCount(2);
+  const activities = logs.getByPlaceholder("散步、跑步、力量训练……");
+  expect(await activities.count()).toBe(2);
+  await activities.nth(0).fill("晨间散步");
+  await activities.nth(0).blur();
+  await activities.nth(1).fill("晚间拉伸");
+  await activities.nth(1).blur();
+  await page.waitForTimeout(100);
+  await page.reload();
+
+  const persisted = page
+    .getByTestId("exercise-log")
+    .getByPlaceholder("散步、跑步、力量训练……");
+  await expect(persisted).toHaveCount(2);
+  await expect(persisted.nth(0)).toHaveValue("晨间散步");
+  await expect(persisted.nth(1)).toHaveValue("晚间拉伸");
+});
+
 test("AI suggestions remain a draft until explicit confirmation", async ({
   page,
   browserName,

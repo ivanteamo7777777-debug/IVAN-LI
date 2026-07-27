@@ -14,11 +14,11 @@ select col_is_unique(
   array['user_id', 'entry_date', 'slot_index'],
   'each user has one record per date and slot'
 );
-select col_is_unique(
+select col_isnt_unique(
   'public',
   'exercise_logs',
   array['user_id', 'entry_date'],
-  'exercise is one independent daily record'
+  'each day may contain multiple independent exercise records'
 );
 select col_is_unique(
   'public',

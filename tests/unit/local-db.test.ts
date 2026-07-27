@@ -116,6 +116,11 @@ describe("IndexedDB local-first persistence", () => {
       version: 0,
     };
     await saveLocal("exercise_logs", exercise);
+    await saveLocal("exercise_logs", {
+      ...exercise,
+      id: "10000000-0000-4000-8000-000000000002",
+      activity: "力量训练",
+    });
     await saveLocal("meal_logs", meal);
     expect(
       await localDb.records
@@ -123,7 +128,65 @@ describe("IndexedDB local-first persistence", () => {
         .equals(["daily_tasks", userId])
         .count(),
     ).toBe(0);
-    expect(await localDb.records.count()).toBe(2);
+    expect(
+      await localDb.records
+        .where("[table+user_id]")
+        .equals(["exercise_logs", userId])
+        .count(),
+    ).toBe(2);
+    expect(await localDb.records.count()).toBe(3);
+  });
+
+  it("syncs each exercise session by id instead of collapsing the day", async () => {
+    const exercise: ExerciseLog = {
+      id: "10000000-0000-4000-8000-000000000003",
+      user_id: userId,
+      entry_date: "2026-07-26",
+      planned: true,
+      activity: "游泳",
+      planned_minutes: 40,
+      actual_minutes: 35,
+      intensity: "moderate",
+      status: "completed",
+      body_feeling: "舒展",
+      notes: "",
+      created_at: now,
+      updated_at: now,
+      version: 0,
+    };
+    const saved = await saveLocal("exercise_logs", exercise);
+    const equals: Array<[string, unknown]> = [];
+    let upsertConflict = "";
+    let upserted: DomainRecord | null = null;
+    const query = {
+      select() {
+        return this;
+      },
+      eq(field: string, value: unknown) {
+        equals.push([field, value]);
+        return this;
+      },
+      async maybeSingle() {
+        return { data: null, error: null };
+      },
+      upsert(payload: DomainRecord, options: { onConflict: string }) {
+        upserted = payload;
+        upsertConflict = options.onConflict;
+        return this;
+      },
+      async single() {
+        return { data: upserted, error: null };
+      },
+    };
+    const client = {
+      from: () => query,
+    } as unknown as SupabaseClient;
+
+    await new SyncEngine(userId, client).flush();
+
+    expect(equals).toContainEqual(["id", saved.id]);
+    expect(equals.some(([field]) => field === "entry_date")).toBe(false);
+    expect(upsertConflict).toBe("id");
   });
 
   it("never lets a realtime echo replace an unsynced local record", async () => {

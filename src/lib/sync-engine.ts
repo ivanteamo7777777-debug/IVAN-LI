@@ -19,7 +19,6 @@ import {
 const naturalKeys: Partial<Record<SyncTable, string>> = {
   daily_tasks: "user_id,entry_date,slot_index",
   daily_entries: "user_id,entry_date",
-  exercise_logs: "user_id,entry_date",
   meal_logs: "user_id,entry_date,meal_type",
   reviews: "user_id,review_type,period_start,period_end",
   reminder_settings: "user_id",
@@ -54,10 +53,7 @@ async function getRemote(
       .eq("user_id", operation.user_id)
       .eq("entry_date", payload.entry_date)
       .eq("meal_type", payload.meal_type);
-  } else if (
-    ["daily_entries", "exercise_logs"].includes(operation.table) &&
-    payload?.entry_date
-  ) {
+  } else if (operation.table === "daily_entries" && payload?.entry_date) {
     query = query
       .eq("user_id", operation.user_id)
       .eq("entry_date", payload.entry_date);

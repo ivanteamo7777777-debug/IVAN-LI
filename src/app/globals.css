@@ -40,7 +40,11 @@ html {
 body {
   min-height: 100dvh;
   background:
-    radial-gradient(circle at 90% 4%, rgba(123, 146, 150, 0.08), transparent 25rem),
+    radial-gradient(
+      circle at 90% 4%,
+      rgba(123, 146, 150, 0.08),
+      transparent 25rem
+    ),
     var(--paper);
   color: var(--ink);
   font-family:
@@ -64,6 +68,7 @@ input,
 textarea,
 select {
   -webkit-tap-highlight-color: transparent;
+  touch-action: manipulation;
 }
 
 .safe-bottom {

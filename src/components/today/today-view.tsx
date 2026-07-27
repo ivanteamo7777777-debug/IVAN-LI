@@ -20,7 +20,7 @@ import { zhCN } from "date-fns/locale";
 import { CalendarDays, Copy, Sparkles } from "lucide-react";
 import { toast } from "sonner";
 import { useRecords } from "@/hooks/use-records";
-import { localDb, patchLocal, saveLocal } from "@/lib/local-db";
+import { deleteLocal, localDb, patchLocal, saveLocal } from "@/lib/local-db";
 import { localDateKey, isoNow, newId, stableUuid } from "@/lib/utils";
 import type {
   DailyTask,
@@ -155,9 +155,7 @@ export function TodayView({ initialDate }: { initialDate?: string }) {
         slots.set(task.slot_index, task);
       }
     }
-    return [...slots.values()].sort(
-      (a, b) => a.slot_index - b.slot_index,
-    );
+    return [...slots.values()].sort((a, b) => a.slot_index - b.slot_index);
   }, [date, tasks]);
 
   useEffect(() => {
@@ -210,7 +208,9 @@ export function TodayView({ initialDate }: { initialDate?: string }) {
     while (current) {
       path.unshift(current.title);
       directionId ||= current.direction_id;
-      current = current.parent_id ? plansById.get(current.parent_id) : undefined;
+      current = current.parent_id
+        ? plansById.get(current.parent_id)
+        : undefined;
     }
     const direction = directionId ? directionsById.get(directionId) : null;
     if (direction) path.unshift(direction.title);
@@ -225,24 +225,36 @@ export function TodayView({ initialDate }: { initialDate?: string }) {
       !["completed", "not_scheduled"].includes(task.status),
   );
 
-  const exercise =
-    exercises.find((item) => item.entry_date === date) ??
-    emptyExercise(userId, date);
+  const todayExercises = useMemo(
+    () =>
+      exercises
+        .filter((item) => item.entry_date === date)
+        .sort(
+          (left, right) =>
+            left.created_at.localeCompare(right.created_at) ||
+            left.id.localeCompare(right.id),
+        ),
+    [date, exercises],
+  );
 
   const meals = useMemo(() => {
     const result = {} as Record<MealType, MealLog>;
-    (["breakfast", "lunch", "dinner", "snack"] as MealType[]).forEach((type) => {
-      result[type] =
-        allMeals.find(
-          (meal) => meal.entry_date === date && meal.meal_type === type,
-        ) ?? emptyMeal(userId, date, type);
-    });
+    (["breakfast", "lunch", "dinner", "snack"] as MealType[]).forEach(
+      (type) => {
+        result[type] =
+          allMeals.find(
+            (meal) => meal.entry_date === date && meal.meal_type === type,
+          ) ?? emptyMeal(userId, date, type);
+      },
+    );
     return result;
   }, [allMeals, date, userId]);
 
   const sensors = useSensors(
     useSensor(PointerSensor, { activationConstraint: { distance: 6 } }),
-    useSensor(KeyboardSensor, { coordinateGetter: sortableKeyboardCoordinates }),
+    useSensor(KeyboardSensor, {
+      coordinateGetter: sortableKeyboardCoordinates,
+    }),
   );
 
   async function onDragEnd(event: DragEndEvent) {
@@ -460,14 +472,27 @@ export function TodayView({ initialDate }: { initialDate?: string }) {
 
       <div className="mt-9 grid gap-6 xl:grid-cols-2">
         <ExerciseSection
-          value={exercise}
-          onPatch={(patch) => {
-            if (exercises.some((item) => item.id === exercise.id)) {
-              void patchLocal("exercise_logs", exercise, patch);
-            } else {
-              void saveLocal("exercise_logs", { ...exercise, ...patch });
-            }
-          }}
+          values={todayExercises}
+          onAdd={() =>
+            void saveLocal("exercise_logs", emptyExercise(userId, date))
+          }
+          onPatch={(exercise, patch) =>
+            void patchLocal("exercise_logs", exercise, patch)
+          }
+          onDelete={(exercise) =>
+            void (async () => {
+              await deleteLocal("exercise_logs", exercise);
+              toast("运动记录已移到回收状态", {
+                action: {
+                  label: "撤销",
+                  onClick: () =>
+                    void patchLocal("exercise_logs", exercise, {
+                      deleted_at: null,
+                    }),
+                },
+              });
+            })()
+          }
         />
         <MealSection
           userId={userId}
@@ -507,7 +532,9 @@ export function TodayView({ initialDate }: { initialDate?: string }) {
                 </button>
               ))
             ) : (
-              <p className="text-sm text-[var(--muted)]">昨天没有未完成事项。</p>
+              <p className="text-sm text-[var(--muted)]">
+                昨天没有未完成事项。
+              </p>
             )}
           </div>
         </DialogContent>

@@ -158,13 +158,13 @@ export function ReviewsView() {
     const periodAccumulations = accumulations.filter((entry) =>
       inRange(entry.entry_date),
     );
-    const exerciseDays = new Set(
-      exercises
+    const periodExercises = exercises.filter((log) => inRange(log.entry_date));
+    const exerciseDays = new Set(periodExercises.map((log) => log.entry_date))
+      .size;
+    const mealDays = new Set(
+      meals
         .filter((log) => inRange(log.entry_date))
         .map((log) => log.entry_date),
-    ).size;
-    const mealDays = new Set(
-      meals.filter((log) => inRange(log.entry_date)).map((log) => log.entry_date),
     ).size;
     return {
       periodTasks,
@@ -179,6 +179,7 @@ export function ReviewsView() {
         .filter(([, count]) => count > 1)
         .map(([title, count]) => `${title}（${count} 次）`),
       exerciseDays,
+      periodExercises,
       mealDays,
     };
   }, [accumulations, end, exercises, meals, plans, start, tasks]);
@@ -227,7 +228,29 @@ export function ReviewsView() {
               reusable_conclusion,
             }),
           ),
-          exercise: { recorded_days: stats.exerciseDays },
+          exercise: {
+            recorded_days: stats.exerciseDays,
+            session_count: stats.periodExercises.length,
+            sessions: stats.periodExercises.map(
+              ({
+                entry_date,
+                activity,
+                planned,
+                actual_minutes,
+                intensity,
+                status,
+                body_feeling,
+              }) => ({
+                entry_date,
+                activity,
+                planned,
+                actual_minutes,
+                intensity,
+                status,
+                body_feeling,
+              }),
+            ),
+          },
           meals: { recorded_days: stats.mealDays },
         }),
       });
@@ -310,7 +333,10 @@ export function ReviewsView() {
         }
       />
 
-      <Tabs value={type} onValueChange={(value) => changeType(value as ReviewType)}>
+      <Tabs
+        value={type}
+        onValueChange={(value) => changeType(value as ReviewType)}
+      >
         <TabsList className="mb-5 flex w-full overflow-x-auto sm:w-auto">
           {(Object.keys(reviewTypeLabels) as ReviewType[]).map((value) => (
             <TabsTrigger key={value} value={value} className="shrink-0">
@@ -357,7 +383,7 @@ export function ReviewsView() {
           ["真实积累", `${stats.periodAccumulations.length} 条`],
           [
             "记录连续性",
-            `运动 ${stats.exerciseDays} 天 · 饮食 ${stats.mealDays} 天`,
+            `运动 ${stats.exerciseDays} 天 / ${stats.periodExercises.length} 次 · 饮食 ${stats.mealDays} 天`,
           ],
         ].map(([label, value]) => (
           <Card key={label}>
@@ -386,7 +412,8 @@ export function ReviewsView() {
 
       {aiDraft && (
         <div className="mb-4 rounded-xl border border-[var(--river)]/30 bg-[var(--accent-wash)] px-4 py-3 text-sm text-[var(--accent-deep)]">
-          当前内容来自 AI 草稿。它尚未成为正式数据；请检查、修改，然后点击“保存复盘”。
+          当前内容来自 AI
+          草稿。它尚未成为正式数据；请检查、修改，然后点击“保存复盘”。
         </div>
       )}
 
