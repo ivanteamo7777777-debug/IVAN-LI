@@ -48,6 +48,13 @@ describe("守中日课 MCP server", () => {
       result.tools.find((tool) => tool.name === "get_today")?.annotations,
     ).toMatchObject({ readOnlyHint: true, openWorldHint: false });
     expect(
+      result.tools.find((tool) => tool.name === "get_today")?._meta,
+    ).toMatchObject({
+      securitySchemes: [
+        { type: "oauth2", scopes: ["openid", "email", "profile"] },
+      ],
+    });
+    expect(
       result.tools.find((tool) => tool.name === "update_daily_task")
         ?.annotations,
     ).toMatchObject({
@@ -72,6 +79,43 @@ describe("守中日课 MCP server", () => {
         meal_logs: [],
       },
     });
+  });
+
+  it("publishes tools before login and returns an OAuth challenge on use", async () => {
+    const [clientTransport, serverTransport] =
+      InMemoryTransport.createLinkedPair();
+    const unauthenticatedServer = createShouzhongMcpServer(
+      null,
+      'Bearer resource_metadata="https://example.com/.well-known/oauth-protected-resource/mcp", error="insufficient_scope", error_description="Authorization required"',
+    );
+    const unauthenticatedClient = new Client({
+      name: "unauthenticated-client",
+      version: "1.0.0",
+    });
+
+    await Promise.all([
+      unauthenticatedServer.connect(serverTransport),
+      unauthenticatedClient.connect(clientTransport),
+    ]);
+
+    try {
+      expect((await unauthenticatedClient.listTools()).tools).toHaveLength(9);
+      const result = await unauthenticatedClient.callTool({
+        name: "get_today",
+        arguments: { date: "2026-07-27" },
+      });
+      expect(result.isError).toBe(true);
+      expect(result._meta).toMatchObject({
+        "mcp/www_authenticate": [
+          expect.stringContaining("/.well-known/oauth-protected-resource/mcp"),
+        ],
+      });
+    } finally {
+      await Promise.all([
+        unauthenticatedClient.close(),
+        unauthenticatedServer.close(),
+      ]);
+    }
   });
 
   it("passes the explicit version guard to a confirmed task update", async () => {

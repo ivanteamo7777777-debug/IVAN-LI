@@ -30,6 +30,24 @@ const writeAnnotations: ToolAnnotations = {
   openWorldHint: false,
 };
 
+const oauthSecuritySchemes = [
+  { type: "oauth2", scopes: ["openid", "email", "profile"] },
+] as const;
+
+function toolMeta(invoking: string, invoked: string) {
+  return {
+    securitySchemes: oauthSecuritySchemes,
+    "openai/toolInvocation/invoking": invoking,
+    "openai/toolInvocation/invoked": invoked,
+  };
+}
+
+class McpUnauthorizedError extends Error {
+  constructor(readonly challenge: string) {
+    super("请先授权 ChatGPT 连接守中日课。");
+  }
+}
+
 function ok(message: string, data: unknown): CallToolResult {
   return {
     content: [{ type: "text", text: message }],
@@ -38,6 +56,15 @@ function ok(message: string, data: unknown): CallToolResult {
 }
 
 function fail(error: unknown): CallToolResult {
+  if (error instanceof McpUnauthorizedError) {
+    return {
+      isError: true,
+      content: [{ type: "text", text: error.message }],
+      _meta: { "mcp/www_authenticate": [error.challenge] },
+      structuredContent: { status: "error", message: error.message },
+    };
+  }
+
   if (error instanceof McpConflictError) {
     return {
       isError: true,
@@ -71,7 +98,15 @@ async function run(
   }
 }
 
-export function createShouzhongMcpServer(repository: McpRepository) {
+export function createShouzhongMcpServer(
+  repository: McpRepository | null,
+  challenge = 'Bearer error="insufficient_scope", error_description="Authorization required"',
+) {
+  const authorizedRepository = () => {
+    if (!repository) throw new McpUnauthorizedError(challenge);
+    return repository;
+  };
+
   const server = new McpServer(
     {
       name: "shouzhong-daily",
@@ -94,10 +129,11 @@ export function createShouzhongMcpServer(repository: McpRepository) {
       },
       outputSchema,
       annotations: readAnnotations,
+      _meta: toolMeta("正在读取今日执行…", "已读取今日执行"),
     },
     async ({ date }) =>
       run(
-        () => repository.getToday(date),
+        () => authorizedRepository().getToday(date),
         () => `已读取 ${date} 的今日执行记录。`,
       ),
   );
@@ -118,10 +154,11 @@ export function createShouzhongMcpServer(repository: McpRepository) {
       },
       outputSchema,
       annotations: readAnnotations,
+      _meta: toolMeta("正在读取计划…", "已读取计划"),
     },
     async (filters) =>
       run(
-        () => repository.listPlans(filters),
+        () => authorizedRepository().listPlans(filters),
         (data) => `已读取 ${(data as unknown[]).length} 条计划。`,
       ),
   );
@@ -141,10 +178,11 @@ export function createShouzhongMcpServer(repository: McpRepository) {
       },
       outputSchema,
       annotations: readAnnotations,
+      _meta: toolMeta("正在搜索长期积累…", "已搜索长期积累"),
     },
     async (filters) =>
       run(
-        () => repository.searchAccumulations(filters),
+        () => authorizedRepository().searchAccumulations(filters),
         (data) => `找到 ${(data as unknown[]).length} 条长期积累。`,
       ),
   );
@@ -161,10 +199,12 @@ export function createShouzhongMcpServer(repository: McpRepository) {
       },
       outputSchema,
       annotations: readAnnotations,
+      _meta: toolMeta("正在汇总周期执行…", "已汇总周期执行"),
     },
     async ({ period_start, period_end }) =>
       run(
-        () => repository.getPeriodSummary(period_start, period_end),
+        () =>
+          authorizedRepository().getPeriodSummary(period_start, period_end),
         () => `已汇总 ${period_start} 至 ${period_end} 的执行数据。`,
       ),
   );
@@ -203,10 +243,11 @@ export function createShouzhongMcpServer(repository: McpRepository) {
       },
       outputSchema,
       annotations: writeAnnotations,
+      _meta: toolMeta("正在更新每日六件事…", "已更新每日六件事"),
     },
     async (input) =>
       run(
-        () => repository.updateDailyTask(input),
+        () => authorizedRepository().updateDailyTask(input),
         () => `已更新 ${input.date} 第 ${input.slot_index} 件事。`,
       ),
   );
@@ -231,10 +272,11 @@ export function createShouzhongMcpServer(repository: McpRepository) {
       },
       outputSchema,
       annotations: { ...writeAnnotations, idempotentHint: true },
+      _meta: toolMeta("正在新增运动记录…", "已新增运动记录"),
     },
     async (input) =>
       run(
-        () => repository.addExercise(input),
+        () => authorizedRepository().addExercise(input),
         () => `已新增 ${input.entry_date} 的运动记录。`,
       ),
   );
@@ -260,10 +302,11 @@ export function createShouzhongMcpServer(repository: McpRepository) {
       },
       outputSchema,
       annotations: writeAnnotations,
+      _meta: toolMeta("正在保存饮食记录…", "已保存饮食记录"),
     },
     async (input) =>
       run(
-        () => repository.upsertMeal(input),
+        () => authorizedRepository().upsertMeal(input),
         () => `已保存 ${input.entry_date} 的饮食记录。`,
       ),
   );
@@ -288,10 +331,11 @@ export function createShouzhongMcpServer(repository: McpRepository) {
       },
       outputSchema,
       annotations: { ...writeAnnotations, idempotentHint: true },
+      _meta: toolMeta("正在计入长期积累…", "已计入长期积累"),
     },
     async (input) =>
       run(
-        () => repository.addAccumulation(input),
+        () => authorizedRepository().addAccumulation(input),
         () => `已把“${input.title}”计入长期积累。`,
       ),
   );
@@ -311,10 +355,11 @@ export function createShouzhongMcpServer(repository: McpRepository) {
       },
       outputSchema,
       annotations: writeAnnotations,
+      _meta: toolMeta("正在保存复盘草稿…", "已保存复盘草稿"),
     },
     async (input) =>
       run(
-        () => repository.saveReviewDraft(input),
+        () => authorizedRepository().saveReviewDraft(input),
         () => "复盘内容已保存为待确认草稿，没有覆盖正式复盘。",
       ),
   );

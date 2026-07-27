@@ -152,7 +152,7 @@ test("responsive navigation prioritizes mobile and desktop patterns", async ({
 test("MCP advertises OAuth and completes the protocol handshake", async ({
   request,
 }) => {
-  const unauthorized = await request.post("/mcp", {
+  const discovered = await request.post("/mcp", {
     headers: {
       accept: "application/json, text/event-stream",
       "content-type": "application/json",
@@ -168,9 +168,9 @@ test("MCP advertises OAuth and completes the protocol handshake", async ({
       },
     },
   });
-  expect(unauthorized.status()).toBe(401);
-  expect(unauthorized.headers()["www-authenticate"]).toContain(
-    "/.well-known/oauth-protected-resource/mcp",
+  expect(discovered.ok()).toBeTruthy();
+  expect((await discovered.json()).result.serverInfo.name).toBe(
+    "shouzhong-daily",
   );
 
   const metadata = await request.get(

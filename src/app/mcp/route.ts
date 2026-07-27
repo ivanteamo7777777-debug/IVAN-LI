@@ -49,27 +49,34 @@ function unauthorized(request: Request) {
 
 async function handleMcp(request: Request) {
   const auth = await authenticateMcpRequest(request);
-  if (!auth) return unauthorized(request);
+  if (!auth && request.method !== "POST") return unauthorized(request);
 
-  const repository =
-    process.env.NEXT_PUBLIC_E2E_MODE === "1"
+  const repository = auth
+    ? process.env.NEXT_PUBLIC_E2E_MODE === "1"
       ? createE2eMcpRepository()
-      : createSupabaseMcpRepository(auth.supabase, auth.user.id);
-  const server = createShouzhongMcpServer(repository);
+      : createSupabaseMcpRepository(auth.supabase, auth.user.id)
+    : null;
+  const challenge = createMcpChallenge(request.url);
+  const server = createShouzhongMcpServer(repository, challenge);
   const transport = new WebStandardStreamableHTTPServerTransport({
     sessionIdGenerator: undefined,
     enableJsonResponse: true,
   });
   await server.connect(transport);
-  const response = await transport.handleRequest(request, {
-    authInfo: {
-      token: auth.accessToken,
-      clientId: "supabase-oauth-client",
-      scopes: ["openid", "email", "profile"],
-      resource: new URL(getMcpResourceUrl(request.url)),
-      extra: { userId: auth.user.id },
-    },
-  });
+  const response = await transport.handleRequest(
+    request,
+    auth
+      ? {
+          authInfo: {
+            token: auth.accessToken,
+            clientId: "supabase-oauth-client",
+            scopes: ["openid", "email", "profile"],
+            resource: new URL(getMcpResourceUrl(request.url)),
+            extra: { userId: auth.user.id },
+          },
+        }
+      : undefined,
+  );
   return withCors(response);
 }
 
