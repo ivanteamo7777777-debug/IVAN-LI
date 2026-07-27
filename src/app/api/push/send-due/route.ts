@@ -44,7 +44,7 @@ function due(currentMinutes: number, target: string) {
   return difference >= 0 && difference < 15;
 }
 
-export async function GET(request: Request) {
+async function sendDueReminders(request: Request) {
   const expected = process.env.CRON_SECRET;
   if (!expected || request.headers.get("authorization") !== `Bearer ${expected}`) {
     return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
@@ -136,3 +136,6 @@ export async function GET(request: Request) {
     );
   }
 }
+
+export const GET = sendDueReminders;
+export const POST = sendDueReminders;

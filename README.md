@@ -6,6 +6,12 @@
 
 这是可安装、可离线记录、可多设备同步的正式 PWA，不依赖 ChatGPT Sites。
 
+## 当前生产环境
+
+- 应用：https://shouzhong-daily.vercel.app
+- GitHub：https://github.com/ivanteamo7777777-debug/IVAN-LI
+- Supabase 项目：`qiykfmmeanlrlrnzxygv`
+
 ## 已实现
 
 - 方向库：Mission、Vision、Value、人生方向与阶段边界，可排序、归档并关联计划。
@@ -18,7 +24,7 @@
 - Supabase：Cookie Session、PostgreSQL、RLS、Storage 私有桶和 Realtime。
 - AI 草稿：三个 Next.js Route Handler 通过 OpenAI Responses API 服务端调用；无密钥时不影响核心功能。
 - PWA：Manifest、Serwist Service Worker、离线页、安装提示、更新提示、iOS 图标、maskable 图标。
-- Web Push：用户主动开启、时区和时间配置、测试通知、Vercel Cron 扫描到期提醒。
+- Web Push：用户主动开启、时区和时间配置、测试通知、Supabase Cron 扫描到期提醒。
 - 数据控制：完整 JSON 备份/恢复、核心模块 CSV、回收站、账号与全部数据删除。
 
 ## 技术栈
@@ -88,8 +94,10 @@ pnpm dlx supabase link --project-ref YOUR_PROJECT_REF
 pnpm dlx supabase db push
 ```
 
-5. 把项目 URL、publishable key 和 secret key写入 Vercel 环境变量。
-6. 在 Supabase 邮件模板和 SMTP 中配置正式发件设置；应用支持密码登录、注册和 magic link。
+5. 把项目 URL、publishable key 和 secret key 写入 Vercel 环境变量。
+6. 在 Supabase Vault 中创建 `shouzhong_site_url` 和 `shouzhong_cron_secret`；
+   后者必须与 Vercel 的 `CRON_SECRET` 相同。
+7. 在 Supabase 邮件模板和 SMTP 中配置正式发件设置；应用支持密码登录、注册和 magic link。
 
 所有公开业务表都启用并强制执行 RLS。策略只允许 `auth.uid() = user_id` 的拥有者访问；Storage 路径第一段必须是用户 UUID。secret key 只用于服务器端管理操作。
 
@@ -111,7 +119,11 @@ pnpm dlx supabase db push
 pnpm exec web-push generate-vapid-keys
 ```
 
-在 Vercel 配置公钥、私钥、subject 和 `CRON_SECRET`。`vercel.json` 每 15 分钟调用一次到期提醒接口。用户只有主动打开某个提醒开关时，应用才请求通知权限。
+在 Vercel 配置公钥、私钥、subject 和 `CRON_SECRET`。到期检查由
+`202607270002_reminder_cron.sql` 中的 Supabase Cron 每 15 分钟触发，并通过
+Vault 中的 `shouzhong_site_url` 与 `shouzhong_cron_secret` 安全调用
+`/api/push/send-due`。这样也兼容只允许每日一次 Cron 的 Vercel Hobby 方案。
+用户只有主动打开某个提醒开关时，应用才请求通知权限。
 
 iPhone/iPad 需要先用 Safari 将应用添加到主屏幕，再从独立应用中开启通知。通知失败只更新订阅状态，不会阻断记录、同步或复盘。
 
