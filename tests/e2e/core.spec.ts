@@ -1,0 +1,76 @@
+import { expect, test } from "@playwright/test";
+
+test("login enters the local test vault and shows six independent positions", async ({
+  page,
+}) => {
+  await page.goto("/auth/login");
+  await page.getByRole("button", { name: "进入本地测试库" }).click();
+  await expect(page).toHaveURL(/\/today/);
+  await expect(page.getByTestId(/^daily-slot-/)).toHaveCount(6);
+  await expect(page.getByTestId("exercise-section")).toBeVisible();
+  await expect(page.getByTestId("meal-section")).toBeVisible();
+});
+
+test("a typed task survives offline reload and does not use exercise or meal slots", async ({
+  page,
+  context,
+  browserName,
+}) => {
+  test.skip(browserName !== "chromium", "Offline navigation is covered in Chromium; WebKit on Windows cannot emulate it reliably.");
+  await page.goto("/today");
+  await expect(page.getByTestId(/^daily-slot-/)).toHaveCount(6);
+  const firstTitle = page
+    .getByTestId("daily-slot-1")
+    .getByPlaceholder("今天真正重要的是什么？");
+  await firstTitle.fill("离线也不会丢失的第一件事");
+  await page.evaluate(async () => {
+    await navigator.serviceWorker.ready;
+  });
+  await page.waitForFunction(() => Boolean(navigator.serviceWorker.controller));
+  await page.reload();
+  await expect(page.getByTestId(/^daily-slot-/)).toHaveCount(6);
+  await context.setOffline(true);
+  await page.reload({ waitUntil: "domcontentloaded" });
+  await expect(
+    page.getByTestId("daily-slot-1").locator("input"),
+  ).toHaveValue("离线也不会丢失的第一件事");
+  await expect(page.getByTestId(/^daily-slot-/)).toHaveCount(6);
+  await context.setOffline(false);
+});
+
+test("AI suggestions remain a draft until explicit confirmation", async ({
+  page,
+  browserName,
+}) => {
+  test.skip(browserName !== "chromium", "The confirmation contract is browser-independent and covered once in Chromium.");
+  await page.goto("/today");
+  await page.getByTestId("ai-suggest").dispatchEvent("click");
+  await expect(page.getByText("AI 六件事建议草稿")).toBeVisible();
+  await expect(page.getByTestId("daily-slot-1").locator("input")).toHaveValue("");
+  await page.getByRole("button", { name: "确认写入空位" }).click();
+  await expect(page.getByTestId("daily-slot-1").locator("input")).toHaveValue(
+    "AI 建议 1",
+  );
+});
+
+test("manifest is installable and icons resolve", async ({ request }) => {
+  const response = await request.get("/manifest.webmanifest");
+  expect(response.ok()).toBeTruthy();
+  const manifest = await response.json();
+  expect(manifest.display).toBe("standalone");
+  expect(manifest.start_url).toBe("/today");
+  for (const icon of manifest.icons) {
+    expect((await request.get(icon.src)).ok()).toBeTruthy();
+  }
+});
+
+test("responsive navigation prioritizes mobile and desktop patterns", async ({
+  page,
+}) => {
+  await page.goto("/today");
+  if ((page.viewportSize()?.width ?? 1024) < 768) {
+    await expect(page.locator("nav").last()).toBeVisible();
+  } else {
+    await expect(page.locator("aside")).toBeVisible();
+  }
+});
