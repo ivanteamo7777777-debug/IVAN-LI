@@ -9,9 +9,11 @@ import { queueFileUpload } from "@/lib/sync-engine";
 import { newId } from "@/lib/utils";
 import type { MealLog, MealType } from "@/types/domain";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
-import { Input } from "@/components/ui/input";
+import {
+  BufferedInput,
+  BufferedTextarea,
+} from "@/components/ui/buffered-field";
 import { Label } from "@/components/ui/label";
-import { Textarea } from "@/components/ui/textarea";
 
 const mealLabels: Record<MealType, string> = {
   breakfast: "早餐",
@@ -68,7 +70,11 @@ export function MealSection({
   onPatch: (type: MealType, patch: Partial<MealLog>) => void;
 }) {
   async function addPhoto(type: MealType, file: File) {
-    const extension = file.name.split(".").pop()?.replace(/[^a-z0-9]/gi, "") || "jpg";
+    const extension =
+      file.name
+        .split(".")
+        .pop()
+        ?.replace(/[^a-z0-9]/gi, "") || "jpg";
     const path = `${userId}/${date}/${newId()}.${extension.toLowerCase()}`;
     await queueFileUpload({
       userId,
@@ -101,7 +107,9 @@ export function MealSection({
                 className="rounded-2xl border border-[var(--line)] bg-[var(--paper)] p-4"
               >
                 <div className="mb-3 flex items-center justify-between">
-                  <h3 className="font-serif font-semibold">{mealLabels[type]}</h3>
+                  <h3 className="font-serif font-semibold">
+                    {mealLabels[type]}
+                  </h3>
                   <label>
                     <input
                       type="file"
@@ -120,13 +128,11 @@ export function MealSection({
                     </span>
                   </label>
                 </div>
-                <Textarea
+                <BufferedTextarea
                   value={meal.content}
                   placeholder={`记录${mealLabels[type]}，不做卡路里诊断`}
                   className="min-h-20"
-                  onChange={(event) =>
-                    onPatch(type, { content: event.target.value })
-                  }
+                  onCommit={(content) => onPatch(type, { content })}
                 />
                 {meal.photo_paths.length > 0 && (
                   <div className="mt-3 grid grid-cols-4 gap-2">
@@ -145,40 +151,39 @@ export function MealSection({
               <Droplets className="size-3.5 text-[var(--river)]" />
               当日饮水（毫升）
             </Label>
-            <Input
+            <BufferedInput
               type="number"
               min={0}
               step={100}
               value={meals.snack.hydration_ml || ""}
-              onChange={(event) =>
+              onCommit={(next) =>
                 onPatch("snack", {
-                  hydration_ml: Number(event.target.value || 0),
+                  hydration_ml: Number(next || 0),
                 })
               }
             />
           </div>
           <div>
             <Label>当日整体感受</Label>
-            <Input
+            <BufferedInput
               value={meals.snack.overall_feeling}
               placeholder="舒适、匆忙、规律……"
-              onChange={(event) =>
-                onPatch("snack", { overall_feeling: event.target.value })
+              onCommit={(overall_feeling) =>
+                onPatch("snack", { overall_feeling })
               }
             />
           </div>
           <div>
             <Label>饮食备注</Label>
-            <Input
+            <BufferedInput
               value={meals.snack.notes}
-              onChange={(event) =>
-                onPatch("snack", { notes: event.target.value })
-              }
+              onCommit={(notes) => onPatch("snack", { notes })}
             />
           </div>
         </div>
         <p className="mt-3 text-xs leading-5 text-[var(--muted-light)]">
-          图片在离线时先保存在此设备，联网后自动上传到按账号隔离的私有 Storage 路径。
+          图片在离线时先保存在此设备，联网后自动上传到按账号隔离的私有 Storage
+          路径。
         </p>
       </CardContent>
     </Card>

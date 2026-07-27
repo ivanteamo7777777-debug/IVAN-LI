@@ -16,7 +16,10 @@ import type { DailyTask, TaskStatus } from "@/types/domain";
 import { taskStatusLabels } from "@/types/domain";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
-import { Input } from "@/components/ui/input";
+import {
+  BufferedInput,
+  BufferedTextarea,
+} from "@/components/ui/buffered-field";
 import { Label } from "@/components/ui/label";
 import {
   Select,
@@ -25,7 +28,6 @@ import {
   SelectTrigger,
   SelectValue,
 } from "@/components/ui/select";
-import { Textarea } from "@/components/ui/textarea";
 
 export function TaskCard({
   task,
@@ -94,23 +96,25 @@ export function TaskCard({
             })
           }
         >
-          {completed ? <Check className="size-4" /> : <Circle className="size-4" />}
+          {completed ? (
+            <Check className="size-4" />
+          ) : (
+            <Circle className="size-4" />
+          )}
         </button>
         <div className="min-w-0 flex-1">
           <div className="flex items-center gap-2">
             <span className="font-serif text-xl font-semibold tabular-nums text-[var(--muted-light)]">
               {String(task.slot_index).padStart(2, "0")}
             </span>
-            <Input
+            <BufferedInput
               value={task.title}
-              placeholder={
-                skipped ? "今天不安排" : "今天真正重要的是什么？"
-              }
+              placeholder={skipped ? "今天不安排" : "今天真正重要的是什么？"}
               className={cn(
                 "h-9 border-0 bg-transparent px-0 text-base font-medium shadow-none focus:ring-0",
                 completed && "line-through decoration-[var(--muted-light)]",
               )}
-              onChange={(event) => onPatch({ title: event.target.value })}
+              onCommit={(title) => onPatch({ title })}
               disabled={skipped}
             />
           </div>
@@ -158,28 +162,28 @@ export function TaskCard({
           </div>
           <div>
             <Label>为什么重要</Label>
-            <Textarea
+            <BufferedTextarea
               value={task.importance}
               placeholder="它和长期方向有什么关系？"
-              onChange={(event) => onPatch({ importance: event.target.value })}
+              onCommit={(importance) => onPatch({ importance })}
             />
           </div>
           <div>
             <Label>完成标准</Label>
-            <Textarea
+            <BufferedTextarea
               value={task.completion_standard}
               placeholder="做到什么程度算完成？"
-              onChange={(event) =>
-                onPatch({ completion_standard: event.target.value })
+              onCommit={(completion_standard) =>
+                onPatch({ completion_standard })
               }
             />
           </div>
           <div>
             <Label>第一步行动</Label>
-            <Textarea
+            <BufferedTextarea
               value={task.first_action}
               placeholder="现在就能做的最小动作"
-              onChange={(event) => onPatch({ first_action: event.target.value })}
+              onCommit={(first_action) => onPatch({ first_action })}
             />
           </div>
           <div>
@@ -211,17 +215,17 @@ export function TaskCard({
           </div>
           <div>
             <Label>实际结果</Label>
-            <Textarea
+            <BufferedTextarea
               value={task.result}
               placeholder="实际发生了什么？"
-              onChange={(event) => onPatch({ result: event.target.value })}
+              onCommit={(result) => onPatch({ result })}
             />
           </div>
           <div>
             <Label>备注</Label>
-            <Textarea
+            <BufferedTextarea
               value={task.notes}
-              onChange={(event) => onPatch({ notes: event.target.value })}
+              onCommit={(notes) => onPatch({ notes })}
             />
           </div>
         </div>

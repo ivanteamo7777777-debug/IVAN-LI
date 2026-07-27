@@ -64,6 +64,28 @@ class ShouzhongDatabase extends Dexie {
 
 export const localDb = new ShouzhongDatabase();
 
+const recordWriteBarriers = new Map<string, Promise<void>>();
+
+async function serializeRecordWrite<T>(
+  key: string,
+  write: () => Promise<T>,
+): Promise<T> {
+  const previous = recordWriteBarriers.get(key) ?? Promise.resolve();
+  const result = previous.catch(() => undefined).then(write);
+  const barrier = result.then(
+    () => undefined,
+    () => undefined,
+  );
+  recordWriteBarriers.set(key, barrier);
+  try {
+    return await result;
+  } finally {
+    if (recordWriteBarriers.get(key) === barrier) {
+      recordWriteBarriers.delete(key);
+    }
+  }
+}
+
 export async function listRecords<T extends DomainRecord>(
   table: SyncTable,
   userId: string,
@@ -72,12 +94,10 @@ export async function listRecords<T extends DomainRecord>(
     .where("[table+user_id]")
     .equals([table, userId])
     .toArray();
-  return rows
-    .filter((row) => !row.data.deleted_at)
-    .map((row) => row.data as T);
+  return rows.filter((row) => !row.data.deleted_at).map((row) => row.data as T);
 }
 
-export async function saveLocal<T extends DomainRecord>(
+async function saveLocalNow<T extends DomainRecord>(
   table: SyncTable,
   data: T,
   options: { queue?: boolean; baseVersion?: number } = {},
@@ -127,12 +147,10 @@ export async function saveLocal<T extends DomainRecord>(
           user_id: next.user_id,
           action: "upsert",
           payload: next,
-          base_version:
-            options.baseVersion ??
-            Math.min(
-              current?.version ?? 0,
-              ...queued.map((operation) => operation.base_version),
-            ),
+          base_version: Math.min(
+            options.baseVersion ?? current?.version ?? 0,
+            ...queued.map((operation) => operation.base_version),
+          ),
           created_at: now,
           attempts: 0,
           last_error: null,
@@ -144,10 +162,17 @@ export async function saveLocal<T extends DomainRecord>(
   return next;
 }
 
-export async function deleteLocal(
+export async function saveLocal<T extends DomainRecord>(
   table: SyncTable,
-  record: DomainRecord,
+  data: T,
+  options: { queue?: boolean; baseVersion?: number } = {},
 ) {
+  return serializeRecordWrite(`${table}:${data.id}`, () =>
+    saveLocalNow(table, data, options),
+  );
+}
+
+export async function deleteLocal(table: SyncTable, record: DomainRecord) {
   const deleted = {
     ...record,
     deleted_at: isoNow(),
@@ -162,51 +187,44 @@ export async function patchLocal<T extends DomainRecord>(
   record: T,
   patch: Partial<T>,
 ) {
-  const current = await localDb.records.get(`${table}:${record.id}`);
-  const source = (current?.data ?? record) as T;
-  return saveLocal(table, { ...source, ...patch } as T, {
-    baseVersion: current?.version ?? record.version,
+  const key = `${table}:${record.id}`;
+  return serializeRecordWrite(key, async () => {
+    const current = await localDb.records.get(key);
+    const source = (current?.data ?? record) as T;
+    return saveLocalNow(table, { ...source, ...patch } as T, {
+      baseVersion: current?.version ?? record.version,
+    });
   });
 }
 
 export async function storeRemote<T extends DomainRecord>(
   table: SyncTable,
   data: T,
+  options: { preserveLocalChanges?: boolean } = {},
 ) {
   const key = `${table}:${data.id}`;
-  const current = await localDb.records.get(key);
-  if (
-    current?.sync_status === "pending" &&
-    current.version !== data.version
-  ) {
-    const conflict: SyncConflict = {
-      id: newId(),
+  return serializeRecordWrite(key, async () => {
+    const current = await localDb.records.get(key);
+    if (
+      options.preserveLocalChanges !== false &&
+      current &&
+      ["pending", "syncing", "failed", "conflict"].includes(current.sync_status)
+    ) {
+      // Realtime can echo an older mutation while a newer local edit is queued.
+      // The flush path compares the cloud base and creates a conflict if needed.
+      // Never replace an unsynced local value from the subscription callback.
+      return;
+    }
+    await localDb.records.put({
+      key,
+      table,
+      id: data.id,
       user_id: data.user_id,
-      table_name: table,
-      record_id: data.id,
-      local_data: current.data as unknown as Record<string, unknown>,
-      remote_data: data as unknown as Record<string, unknown>,
-      resolution: "pending",
-      resolved_at: null,
-      created_at: isoNow(),
-      updated_at: isoNow(),
-      version: 1,
-    };
-    await localDb.transaction("rw", localDb.conflicts, localDb.records, async () => {
-      await localDb.conflicts.add(conflict);
-      await localDb.records.update(key, { sync_status: "conflict" });
+      data,
+      version: data.version,
+      updated_at: data.updated_at,
+      sync_status: "synced",
     });
-    return;
-  }
-  await localDb.records.put({
-    key,
-    table,
-    id: data.id,
-    user_id: data.user_id,
-    data,
-    version: data.version,
-    updated_at: data.updated_at,
-    sync_status: "synced",
   });
 }
 
@@ -223,21 +241,30 @@ export async function resolveConflict(
     updated_at: isoNow(),
   });
   if (choice === "local") {
-    await saveLocal(conflict.table_name, {
-      ...record,
-      version:
-        Math.max(
-          Number(conflict.local_data.version ?? 0),
-          Number(conflict.remote_data.version ?? 0),
-        ) + 1,
-    } as DomainRecord);
+    const resolvedBaseVersion = Math.max(
+      Number(conflict.local_data.version ?? 0),
+      Number(conflict.remote_data.version ?? 0),
+    );
+    await saveLocal(
+      conflict.table_name,
+      {
+        ...record,
+        version: resolvedBaseVersion + 1,
+      } as DomainRecord,
+      { baseVersion: resolvedBaseVersion },
+    );
   } else {
-    await storeRemote(conflict.table_name, record);
+    await storeRemote(conflict.table_name, record, {
+      preserveLocalChanges: false,
+    });
   }
 }
 
 export async function exportAllData(userId: string) {
-  const records = await localDb.records.where("user_id").equals(userId).toArray();
+  const records = await localDb.records
+    .where("user_id")
+    .equals(userId)
+    .toArray();
   return {
     format: "shouzhong-daily-backup",
     schema_version: 1,

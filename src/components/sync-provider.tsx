@@ -25,6 +25,7 @@ interface SyncContextValue {
 }
 
 const SyncContext = createContext<SyncContextValue | null>(null);
+const SYNC_BATCH_DELAY_MS = 700;
 
 export function SyncProvider({
   userId,
@@ -36,6 +37,7 @@ export function SyncProvider({
   children: React.ReactNode;
 }) {
   const engine = useRef<SyncEngine | null>(null);
+  const syncTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
   const [online, setOnline] = useState(
     typeof navigator === "undefined" ? true : navigator.onLine,
   );
@@ -62,16 +64,33 @@ export function SyncProvider({
 
   const syncNow = useCallback(async () => {
     if (localOnly || !engine.current || !navigator.onLine) return;
+    if (syncTimer.current !== null) {
+      clearTimeout(syncTimer.current);
+      syncTimer.current = null;
+    }
     await engine.current.flush();
   }, [localOnly]);
+
+  const scheduleSync = useCallback(() => {
+    if (localOnly || !navigator.onLine) return;
+    if (syncTimer.current !== null) clearTimeout(syncTimer.current);
+    syncTimer.current = setTimeout(() => {
+      syncTimer.current = null;
+      void syncNow();
+    }, SYNC_BATCH_DELAY_MS);
+  }, [localOnly, syncNow]);
 
   useEffect(() => {
     const onOnline = () => {
       setOnline(true);
+      if (syncTimer.current !== null) {
+        clearTimeout(syncTimer.current);
+        syncTimer.current = null;
+      }
       void syncNow();
     };
     const onOffline = () => setOnline(false);
-    const onSyncRequest = () => void syncNow();
+    const onSyncRequest = () => scheduleSync();
     const onWorkerMessage = (event: MessageEvent) => {
       if (event.data?.type === "SHOUZHONG_SYNC_REQUEST") void syncNow();
     };
@@ -80,12 +99,16 @@ export function SyncProvider({
     window.addEventListener("shouzhong:sync-request", onSyncRequest);
     navigator.serviceWorker?.addEventListener("message", onWorkerMessage);
     return () => {
+      if (syncTimer.current !== null) {
+        clearTimeout(syncTimer.current);
+        syncTimer.current = null;
+      }
       window.removeEventListener("online", onOnline);
       window.removeEventListener("offline", onOffline);
       window.removeEventListener("shouzhong:sync-request", onSyncRequest);
       navigator.serviceWorker?.removeEventListener("message", onWorkerMessage);
     };
-  }, [syncNow]);
+  }, [scheduleSync, syncNow]);
 
   useEffect(() => {
     if (localOnly) return;

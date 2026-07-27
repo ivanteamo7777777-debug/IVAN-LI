@@ -3,7 +3,10 @@
 import { Dumbbell } from "lucide-react";
 import type { ExerciseLog } from "@/types/domain";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
-import { Input } from "@/components/ui/input";
+import {
+  BufferedInput,
+  BufferedTextarea,
+} from "@/components/ui/buffered-field";
 import { Label } from "@/components/ui/label";
 import {
   Select,
@@ -13,7 +16,6 @@ import {
   SelectValue,
 } from "@/components/ui/select";
 import { Switch } from "@/components/ui/switch";
-import { Textarea } from "@/components/ui/textarea";
 
 export function ExerciseSection({
   value,
@@ -41,38 +43,34 @@ export function ExerciseSection({
       <CardContent className="grid gap-4 sm:grid-cols-2">
         <div className="sm:col-span-2">
           <Label>运动项目</Label>
-          <Input
+          <BufferedInput
             value={value.activity}
             placeholder="散步、跑步、力量训练……"
-            onChange={(event) => onPatch({ activity: event.target.value })}
+            onCommit={(activity) => onPatch({ activity })}
           />
         </div>
         <div>
           <Label>计划时长（分钟）</Label>
-          <Input
+          <BufferedInput
             type="number"
             min={0}
             value={value.planned_minutes ?? ""}
-            onChange={(event) =>
+            onCommit={(next) =>
               onPatch({
-                planned_minutes: event.target.value
-                  ? Number(event.target.value)
-                  : null,
+                planned_minutes: next ? Number(next) : null,
               })
             }
           />
         </div>
         <div>
           <Label>实际时长（分钟）</Label>
-          <Input
+          <BufferedInput
             type="number"
             min={0}
             value={value.actual_minutes ?? ""}
-            onChange={(event) =>
+            onCommit={(next) =>
               onPatch({
-                actual_minutes: event.target.value
-                  ? Number(event.target.value)
-                  : null,
+                actual_minutes: next ? Number(next) : null,
               })
             }
           />
@@ -105,7 +103,9 @@ export function ExerciseSection({
           <Label>完成状态</Label>
           <Select
             value={value.status}
-            onValueChange={(status: ExerciseLog["status"]) => onPatch({ status })}
+            onValueChange={(status: ExerciseLog["status"]) =>
+              onPatch({ status })
+            }
           >
             <SelectTrigger>
               <SelectValue />
@@ -119,16 +119,16 @@ export function ExerciseSection({
         </div>
         <div>
           <Label>身体感受</Label>
-          <Textarea
+          <BufferedTextarea
             value={value.body_feeling}
-            onChange={(event) => onPatch({ body_feeling: event.target.value })}
+            onCommit={(body_feeling) => onPatch({ body_feeling })}
           />
         </div>
         <div>
           <Label>备注</Label>
-          <Textarea
+          <BufferedTextarea
             value={value.notes}
-            onChange={(event) => onPatch({ notes: event.target.value })}
+            onCommit={(notes) => onPatch({ notes })}
           />
         </div>
       </CardContent>

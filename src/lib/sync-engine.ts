@@ -36,7 +36,10 @@ async function getRemote(
   operation: SyncOperation,
 ): Promise<DomainRecord | null> {
   let query = table(client, operation.table).select("*");
-  const payload = operation.payload as unknown as Record<string, unknown> | null;
+  const payload = operation.payload as unknown as Record<
+    string,
+    unknown
+  > | null;
   if (
     operation.table === "daily_tasks" &&
     payload?.entry_date &&
@@ -74,36 +77,123 @@ async function getRemote(
   return data as unknown as DomainRecord | null;
 }
 
-async function createConflict(
-  operation: SyncOperation,
-  local: DomainRecord,
-  remote: DomainRecord,
-) {
-  const now = isoNow();
-  const conflict: SyncConflict = {
-    id: newId(),
-    user_id: operation.user_id,
-    table_name: operation.table,
-    record_id: local.id,
-    local_data: local as unknown as Record<string, unknown>,
-    remote_data: remote as unknown as Record<string, unknown>,
-    resolution: "pending",
-    resolved_at: null,
-    created_at: now,
-    updated_at: now,
-    version: 1,
-  };
+async function createConflict(operation: SyncOperation, remote: DomainRecord) {
   await localDb.transaction(
     "rw",
     localDb.conflicts,
     localDb.records,
     localDb.operations,
     async () => {
+      const key = `${operation.table}:${operation.record_id}`;
+      const current = await localDb.records.get(key);
+      if (!operationMatchesLocal(current, operation)) {
+        await localDb.operations.delete(operation.id);
+        return;
+      }
+      const now = isoNow();
+      const conflict: SyncConflict = {
+        id: newId(),
+        user_id: operation.user_id,
+        table_name: operation.table,
+        record_id: current.id,
+        local_data: current.data as unknown as Record<string, unknown>,
+        remote_data: remote as unknown as Record<string, unknown>,
+        resolution: "pending",
+        resolved_at: null,
+        created_at: now,
+        updated_at: now,
+        version: 1,
+      };
       await localDb.conflicts.add(conflict);
-      await localDb.records.update(`${operation.table}:${local.id}`, {
+      await localDb.records.update(key, {
         sync_status: "conflict",
       });
       await localDb.operations.delete(operation.id);
+    },
+  );
+}
+
+function operationMatchesLocal(
+  local: LocalRecord | undefined,
+  operation: SyncOperation,
+): local is LocalRecord {
+  return Boolean(
+    local &&
+    operation.payload &&
+    local.id === operation.record_id &&
+    local.version === operation.payload.version &&
+    local.updated_at === operation.payload.updated_at,
+  );
+}
+
+function sameRecordContent(left: DomainRecord, right: DomainRecord) {
+  const ignored = new Set(["updated_at", "version"]);
+  const keys = new Set([...Object.keys(left), ...Object.keys(right)]);
+  for (const key of keys) {
+    if (ignored.has(key)) continue;
+    const leftValue = (left as unknown as Record<string, unknown>)[key];
+    const rightValue = (right as unknown as Record<string, unknown>)[key];
+    if (JSON.stringify(leftValue) !== JSON.stringify(rightValue)) return false;
+  }
+  return true;
+}
+
+export async function acknowledgeOperation(
+  operation: SyncOperation,
+  returned: DomainRecord,
+) {
+  const key = `${operation.table}:${operation.record_id}`;
+  await localDb.transaction(
+    "rw",
+    localDb.operations,
+    localDb.records,
+    async () => {
+      const current = await localDb.records.get(key);
+      const newerOperations = (
+        await localDb.operations
+          .where("record_id")
+          .equals(operation.record_id)
+          .filter(
+            (candidate) =>
+              candidate.id !== operation.id &&
+              candidate.table === operation.table &&
+              candidate.user_id === operation.user_id,
+          )
+          .toArray()
+      ).filter((candidate) => candidate.action === "upsert");
+
+      await localDb.operations.delete(operation.id);
+
+      if (
+        operationMatchesLocal(current, operation) &&
+        newerOperations.length === 0
+      ) {
+        await localDb.records.put({
+          key: `${operation.table}:${returned.id}`,
+          table: operation.table,
+          id: returned.id,
+          user_id: returned.user_id,
+          data: returned,
+          version: returned.version,
+          updated_at: returned.updated_at,
+          sync_status: "synced",
+        });
+        if (returned.id !== operation.record_id) {
+          await localDb.records.delete(key);
+        }
+        return;
+      }
+
+      // A newer local edit landed while this request was in flight. Preserve it
+      // and advance its cloud base to the acknowledged server version.
+      for (const newer of newerOperations) {
+        await localDb.operations.update(newer.id, {
+          base_version: Math.max(newer.base_version, returned.version),
+        });
+      }
+      if (current?.sync_status === "syncing") {
+        await localDb.records.update(key, { sync_status: "pending" });
+      }
     },
   );
 }
@@ -149,10 +239,11 @@ export class SyncEngine {
   private userId: string;
   private channel?: RealtimeChannel;
   private flushing = false;
+  private flushRequested = false;
 
-  constructor(userId: string) {
+  constructor(userId: string, client?: SupabaseClient) {
     this.userId = userId;
-    this.client = createClient();
+    this.client = client ?? createClient();
   }
 
   async hydrate() {
@@ -194,50 +285,65 @@ export class SyncEngine {
   }
 
   async flush() {
-    if (this.flushing || !navigator.onLine) return;
+    if (!navigator.onLine) return;
+    if (this.flushing) {
+      this.flushRequested = true;
+      return;
+    }
     this.flushing = true;
     try {
-      const files = await localDb.files
-        .where("[user_id+status]")
-        .anyOf([
-          [this.userId, "pending"],
-          [this.userId, "failed"],
-        ])
-        .toArray();
-      for (const file of files) await flushFile(this.client, file.id);
-
-      const operations = await localDb.operations
-        .where("[user_id+created_at]")
-        .between([this.userId, Dexie.minKey], [this.userId, Dexie.maxKey])
-        .sortBy("created_at");
-      for (const operation of operations) {
-        await this.flushOperation(operation);
-      }
+      do {
+        this.flushRequested = false;
+        await this.flushBatch();
+      } while (this.flushRequested && navigator.onLine);
     } finally {
       this.flushing = false;
     }
   }
 
+  private async flushBatch() {
+    const files = await localDb.files
+      .where("[user_id+status]")
+      .anyOf([
+        [this.userId, "pending"],
+        [this.userId, "failed"],
+      ])
+      .toArray();
+    for (const file of files) await flushFile(this.client, file.id);
+
+    const operations = await localDb.operations
+      .where("[user_id+created_at]")
+      .between([this.userId, Dexie.minKey], [this.userId, Dexie.maxKey])
+      .sortBy("created_at");
+    for (const operation of operations) {
+      await this.flushOperation(operation);
+    }
+  }
+
   private async flushOperation(operation: SyncOperation) {
     const key = `${operation.table}:${operation.record_id}`;
-    const local = await localDb.records.get(key);
-    if (!local) {
+    const payload = operation.payload as DomainRecord | null;
+    let local = await localDb.records.get(key);
+    if (!payload || !operationMatchesLocal(local, operation)) {
       await localDb.operations.delete(operation.id);
       return;
     }
     await localDb.records.update(key, { sync_status: "syncing" });
     try {
       const remote = await getRemote(this.client, operation);
+      local = await localDb.records.get(key);
+      if (!operationMatchesLocal(local, operation)) {
+        await localDb.operations.delete(operation.id);
+        return;
+      }
       if (remote && remote.version > operation.base_version) {
-        const sameMutation =
-          remote.updated_at === operation.payload?.updated_at &&
-          remote.version === operation.payload?.version;
-        if (!sameMutation) {
-          await createConflict(operation, local.data, remote);
+        if (sameRecordContent(remote, payload)) {
+          await acknowledgeOperation(operation, remote);
           return;
         }
+        await createConflict(operation, remote);
+        return;
       }
-      const payload = operation.payload as DomainRecord;
       const { data, error } = await table(this.client, operation.table)
         .upsert(payload as never, {
           onConflict: naturalKeys[operation.table] ?? "id",
@@ -245,28 +351,7 @@ export class SyncEngine {
         .select("*")
         .single();
       if (error) throw error;
-      await localDb.transaction(
-        "rw",
-        localDb.operations,
-        localDb.records,
-        async () => {
-          await localDb.operations.delete(operation.id);
-          const returned = data as unknown as DomainRecord;
-          await localDb.records.put({
-            key: `${operation.table}:${returned.id}`,
-            table: operation.table,
-            id: returned.id,
-            user_id: returned.user_id,
-            data: returned,
-            version: returned.version,
-            updated_at: returned.updated_at,
-            sync_status: "synced",
-          });
-          if (returned.id !== operation.record_id) {
-            await localDb.records.delete(key);
-          }
-        },
-      );
+      await acknowledgeOperation(operation, data as unknown as DomainRecord);
     } catch (error) {
       const message =
         error instanceof Error ? error.message.slice(0, 200) : "同步失败";
@@ -275,6 +360,15 @@ export class SyncEngine {
         localDb.operations,
         localDb.records,
         async () => {
+          const current = await localDb.records.get(key);
+          const queued = await localDb.operations.get(operation.id);
+          if (!queued || !operationMatchesLocal(current, operation)) {
+            await localDb.operations.delete(operation.id);
+            if (current?.sync_status === "syncing") {
+              await localDb.records.update(key, { sync_status: "pending" });
+            }
+            return;
+          }
           await localDb.operations.update(operation.id, {
             attempts: operation.attempts + 1,
             last_error: message,
