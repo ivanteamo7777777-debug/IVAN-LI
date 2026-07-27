@@ -8,6 +8,7 @@ import {
   CardHeader,
   CardTitle,
 } from "@/components/ui/card";
+import { isValidAuthorizationId } from "@/lib/oauth/authorization-id";
 import { createClient } from "@/lib/supabase/server";
 
 export const dynamic = "force-dynamic";
@@ -42,8 +43,8 @@ export default async function OAuthConsentPage({
   searchParams: Promise<{ authorization_id?: string }>;
 }) {
   const { authorization_id: authorizationId } = await searchParams;
-  if (!authorizationId) {
-    return <ConsentError message="授权请求缺少 authorization_id。" />;
+  if (!isValidAuthorizationId(authorizationId)) {
+    return <ConsentError message="授权请求无效或缺少 authorization_id。" />;
   }
 
   const supabase = await createClient();

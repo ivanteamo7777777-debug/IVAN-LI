@@ -1,4 +1,5 @@
 import { NextResponse } from "next/server";
+import { isValidAuthorizationId } from "@/lib/oauth/authorization-id";
 import { createClient } from "@/lib/supabase/server";
 
 export const runtime = "nodejs";
@@ -20,8 +21,7 @@ export async function POST(request: Request) {
   const authorizationId = form.get("authorization_id");
   const decision = form.get("decision");
   if (
-    typeof authorizationId !== "string" ||
-    !/^[0-9a-f-]{36}$/i.test(authorizationId) ||
+    !isValidAuthorizationId(authorizationId) ||
     (decision !== "approve" && decision !== "deny")
   ) {
     return NextResponse.json({ error: "invalid_request" }, { status: 400 });
