@@ -6,10 +6,7 @@ import manifest from "@/app/manifest";
 
 const root = process.cwd();
 const migration = fs.readFileSync(
-  path.join(
-    root,
-    "supabase/migrations/202607260001_initial_schema.sql",
-  ),
+  path.join(root, "supabase/migrations/202607260001_initial_schema.sql"),
   "utf8",
 );
 
@@ -77,5 +74,40 @@ describe("production contracts", () => {
     expect(sw).toContain('url: "/offline"');
     expect(sw).toContain('self.addEventListener("push"');
     expect(sw).toContain('self.addEventListener("notificationclick"');
+  });
+
+  it("keeps MCP on user OAuth and exposes a protected-resource challenge", () => {
+    const route = fs.readFileSync(
+      path.join(root, "src/app/mcp/route.ts"),
+      "utf8",
+    );
+    const auth = fs.readFileSync(
+      path.join(root, "src/lib/mcp/auth.ts"),
+      "utf8",
+    );
+    expect(route).toContain("WWW-Authenticate");
+    expect(route).toContain("createSupabaseMcpRepository");
+    expect(auth).toContain("supabase.auth.getUser(accessToken)");
+    expect(route).not.toContain("SUPABASE_SECRET_KEY");
+    expect(auth).not.toContain("SUPABASE_SECRET_KEY");
+  });
+
+  it("ships a repo-local plugin pointing at the production MCP endpoint", () => {
+    const plugin = JSON.parse(
+      fs.readFileSync(
+        path.join(root, "plugins/shouzhong-daily/.codex-plugin/plugin.json"),
+        "utf8",
+      ),
+    );
+    const mcp = JSON.parse(
+      fs.readFileSync(
+        path.join(root, "plugins/shouzhong-daily/.mcp.json"),
+        "utf8",
+      ),
+    );
+    expect(plugin.name).toBe("shouzhong-daily");
+    expect(mcp.mcpServers["shouzhong-daily"].url).toBe(
+      "https://shouzhong-daily.vercel.app/mcp",
+    );
   });
 });

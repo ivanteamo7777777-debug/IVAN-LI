@@ -1,0 +1,29 @@
+{
+  "name": "shouzhong-daily",
+  "version": "1.0.0",
+  "description": "Connect 守中日课 plans, daily execution, accumulations, and review drafts through MCP.",
+  "author": {
+    "name": "IVAN-LI",
+    "url": "https://github.com/ivanteamo7777777-debug"
+  },
+  "homepage": "https://shouzhong-daily.vercel.app",
+  "repository": "https://github.com/ivanteamo7777777-debug/IVAN-LI",
+  "keywords": ["mcp", "planning", "daily-review", "productivity"],
+  "skills": "./skills/",
+  "interface": {
+    "displayName": "守中日课",
+    "shortDescription": "把每日执行连接到长期方向与真实积累。",
+    "longDescription": "读取方向、计划、每日六件事、运动、饮食与长期积累；在用户确认后更新执行记录或保存复盘草稿。",
+    "developerName": "IVAN-LI",
+    "category": "Productivity",
+    "capabilities": ["Interactive", "Write"],
+    "websiteURL": "https://shouzhong-daily.vercel.app",
+    "defaultPrompt": [
+      "读取我今天的六件事和计划路径，帮我判断先做什么。",
+      "根据本周真实执行与积累，起草一份周复盘。",
+      "把这次完成后的可复用结论保存到长期积累。"
+    ],
+    "brandColor": "#55715E"
+  },
+  "mcpServers": "./.mcp.json"
+}

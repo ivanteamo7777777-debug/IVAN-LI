@@ -59,6 +59,7 @@
 | `VAPID_SUBJECT` | 仅服务端 | 如 `mailto:owner@example.com` |
 | `CRON_SECRET` | 仅服务端 | 保护 `/api/push/send-due` |
 | `NEXT_PUBLIC_SITE_URL` | 浏览器/服务端 | 正式域名，例如 `https://example.vercel.app` |
+| `APP_URL` | 仅服务端 | MCP 受保护资源的正式域名，例如 `https://shouzhong-daily.vercel.app` |
 | `NEXT_PUBLIC_E2E_MODE` | 仅自动化测试 | 生产环境不要配置 |
 
 仓库不读取或提交任何真实密钥，客户端代码也不会引用服务端密钥。
@@ -134,6 +135,32 @@ iPhone/iPad 需要先用 Safari 将应用添加到主屏幕，再从独立应用
 - 桌面 Chrome/Edge：地址栏安装图标或应用内安装提示。
 
 新版本就绪时界面会提示刷新。离线时可打开已经访问过的应用外壳，编辑六件事，记录运动、饮食和图片；恢复网络后队列按创建顺序同步。
+
+## ChatGPT / Codex MCP 插件
+
+生产 MCP 地址：
+
+```text
+https://shouzhong-daily.vercel.app/mcp
+```
+
+MCP 使用 Supabase OAuth 2.1 和用户自己的访问令牌。所有请求继续受现有 RLS 约束，不使用 `service_role`，也不会在插件包中保存密码、密钥或令牌。
+
+已提供的工具：
+
+- 读取今日六件事、多个运动记录、饮食记录和完整计划路径
+- 筛选年度/月度/每周计划
+- 搜索长期积累与生成周期事实摘要
+- 经用户明确确认后修改每日任务、新增运动、保存饮食与长期积累
+- 只保存到 `ai_draft` 的复盘草稿，不覆盖正式复盘
+
+写入工具必须携带读取到的 `expected_version`。若另一设备已更新记录，服务会返回当前云端版本并要求用户选择，不会静默覆盖。
+
+仓库内插件包位于 `plugins/shouzhong-daily/`。在 ChatGPT 中连接时，开启开发者模式并添加上面的 MCP 地址；首次连接会跳转到守中日课授权页。Supabase OAuth Server 需要设置：
+
+- Site URL：`https://shouzhong-daily.vercel.app`
+- Authorization Path：`/oauth/consent`
+- Allow Dynamic OAuth Apps：开启（仅在确认动态客户端注册风险后）
 
 ## 同步与冲突
 

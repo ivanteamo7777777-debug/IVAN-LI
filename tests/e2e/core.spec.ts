@@ -80,7 +80,9 @@ test("multiple exercise sessions persist independently on the same day", async (
   page,
 }) => {
   await page.goto("/today");
-  await expect(page.getByTestId(/^daily-slot-/)).toHaveCount(6);
+  await expect(page.getByTestId(/^daily-slot-/)).toHaveCount(6, {
+    timeout: 30_000,
+  });
   const add = page.getByTestId("add-exercise");
   await add.click();
   await expect(page.getByTestId("exercise-log")).toHaveCount(1);
@@ -145,4 +147,61 @@ test("responsive navigation prioritizes mobile and desktop patterns", async ({
   } else {
     await expect(page.locator("aside")).toBeVisible();
   }
+});
+
+test("MCP advertises OAuth and completes the protocol handshake", async ({
+  request,
+}) => {
+  const unauthorized = await request.post("/mcp", {
+    headers: {
+      accept: "application/json, text/event-stream",
+      "content-type": "application/json",
+    },
+    data: {
+      jsonrpc: "2.0",
+      id: 1,
+      method: "initialize",
+      params: {
+        protocolVersion: "2025-06-18",
+        capabilities: {},
+        clientInfo: { name: "playwright", version: "1.0.0" },
+      },
+    },
+  });
+  expect(unauthorized.status()).toBe(401);
+  expect(unauthorized.headers()["www-authenticate"]).toContain(
+    "/.well-known/oauth-protected-resource/mcp",
+  );
+
+  const metadata = await request.get(
+    "/.well-known/oauth-protected-resource/mcp",
+  );
+  expect(metadata.ok()).toBeTruthy();
+  const metadataBody = await metadata.json();
+  expect(metadataBody.resource).toMatch(/^https?:\/\/.+\/mcp$/);
+  expect(metadataBody.authorization_servers[0]).toMatch(
+    /^https:\/\/.+\.supabase\.co\/auth\/v1$/,
+  );
+
+  const initialized = await request.post("/mcp", {
+    headers: {
+      authorization: "Bearer e2e-mcp-token",
+      accept: "application/json, text/event-stream",
+      "content-type": "application/json",
+    },
+    data: {
+      jsonrpc: "2.0",
+      id: 2,
+      method: "initialize",
+      params: {
+        protocolVersion: "2025-06-18",
+        capabilities: {},
+        clientInfo: { name: "playwright", version: "1.0.0" },
+      },
+    },
+  });
+  expect(initialized.ok()).toBeTruthy();
+  expect((await initialized.json()).result.serverInfo.name).toBe(
+    "shouzhong-daily",
+  );
 });

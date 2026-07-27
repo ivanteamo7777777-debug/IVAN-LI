@@ -2,11 +2,20 @@ import { redirect } from "next/navigation";
 import Image from "next/image";
 import { hasSupabaseEnv } from "@/lib/supabase/config";
 import { LoginForm } from "@/components/login-form";
+import { safeInternalPath } from "@/lib/safe-redirect";
 
-export default function LoginPage() {
+export const dynamic = "force-dynamic";
+
+export default async function LoginPage({
+  searchParams,
+}: {
+  searchParams: Promise<{ next?: string }>;
+}) {
   if (!hasSupabaseEnv() && process.env.NEXT_PUBLIC_E2E_MODE !== "1") {
     redirect("/setup");
   }
+  const { next } = await searchParams;
+  const nextPath = safeInternalPath(next);
   return (
     <main className="paper-grid grid min-h-dvh lg:grid-cols-[1.05fr_.95fr]">
       <section className="hidden flex-col justify-between border-r border-[var(--line)] p-12 lg:flex">
@@ -42,7 +51,10 @@ export default function LoginPage() {
         </p>
       </section>
       <section className="flex items-center justify-center p-5">
-        <LoginForm e2e={process.env.NEXT_PUBLIC_E2E_MODE === "1"} />
+        <LoginForm
+          e2e={process.env.NEXT_PUBLIC_E2E_MODE === "1"}
+          nextPath={nextPath}
+        />
       </section>
     </main>
   );

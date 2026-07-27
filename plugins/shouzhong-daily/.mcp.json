@@ -1,0 +1,8 @@
+{
+  "mcpServers": {
+    "shouzhong-daily": {
+      "type": "http",
+      "url": "https://shouzhong-daily.vercel.app/mcp"
+    }
+  }
+}

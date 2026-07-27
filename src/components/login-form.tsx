@@ -10,9 +10,17 @@ import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
+import { safeInternalPath } from "@/lib/safe-redirect";
 
-export function LoginForm({ e2e = false }: { e2e?: boolean }) {
+export function LoginForm({
+  e2e = false,
+  nextPath = "/today",
+}: {
+  e2e?: boolean;
+  nextPath?: string;
+}) {
   const router = useRouter();
+  const destination = safeInternalPath(nextPath);
   const [mode, setMode] = useState<"login" | "signup">("login");
   const [email, setEmail] = useState("");
   const [password, setPassword] = useState("");
@@ -21,7 +29,7 @@ export function LoginForm({ e2e = false }: { e2e?: boolean }) {
   async function submit(event: React.FormEvent) {
     event.preventDefault();
     if (e2e) {
-      router.push("/today");
+      router.push(destination);
       return;
     }
     setLoading(true);
@@ -34,14 +42,14 @@ export function LoginForm({ e2e = false }: { e2e?: boolean }) {
               email,
               password,
               options: {
-                emailRedirectTo: `${window.location.origin}/auth/callback`,
+                emailRedirectTo: `${window.location.origin}/auth/callback?next=${encodeURIComponent(destination)}`,
               },
             });
       if (error) throw error;
       if (mode === "signup") {
         toast.success("注册成功，请检查邮箱完成确认");
       } else {
-        router.replace("/today");
+        router.replace(destination);
         router.refresh();
       }
     } catch (error) {
@@ -58,7 +66,7 @@ export function LoginForm({ e2e = false }: { e2e?: boolean }) {
       const { error } = await supabase.auth.signInWithOtp({
         email,
         options: {
-          emailRedirectTo: `${window.location.origin}/auth/callback`,
+          emailRedirectTo: `${window.location.origin}/auth/callback?next=${encodeURIComponent(destination)}`,
         },
       });
       if (error) throw error;
@@ -108,7 +116,9 @@ export function LoginForm({ e2e = false }: { e2e?: boolean }) {
             <Input
               id="password"
               type="password"
-              autoComplete={mode === "login" ? "current-password" : "new-password"}
+              autoComplete={
+                mode === "login" ? "current-password" : "new-password"
+              }
               minLength={8}
               value={password}
               onChange={(event) => setPassword(event.target.value)}
@@ -116,7 +126,13 @@ export function LoginForm({ e2e = false }: { e2e?: boolean }) {
             />
           </div>
           <Button className="w-full" disabled={loading}>
-            {loading ? "请稍候…" : e2e ? "进入本地测试库" : mode === "login" ? "登录" : "注册"}
+            {loading
+              ? "请稍候…"
+              : e2e
+                ? "进入本地测试库"
+                : mode === "login"
+                  ? "登录"
+                  : "注册"}
             <ArrowRight />
           </Button>
         </form>
