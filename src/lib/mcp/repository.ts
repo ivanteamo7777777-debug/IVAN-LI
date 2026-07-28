@@ -1,6 +1,24 @@
 import type { SupabaseClient } from "@supabase/supabase-js";
 
-type JsonRecord = Record<string, unknown>;
+export type JsonRecord = Record<string, unknown>;
+export type PlanType = "annual" | "monthly" | "weekly";
+export type PlanStatus =
+  "draft" | "active" | "paused" | "completed" | "archived";
+
+export type McpErrorCode =
+  | "INVALID_ARGUMENT"
+  | "UNAUTHORIZED"
+  | "NOT_FOUND"
+  | "RECORD_DELETED"
+  | "RECORD_ARCHIVED"
+  | "VERSION_CONFLICT"
+  | "HIERARCHY_VIOLATION"
+  | "CYCLE_DETECTED"
+  | "IDEMPOTENCY_CONFLICT"
+  | "BATCH_UPDATE_FAILED"
+  | "PARTIAL_FAILURE"
+  | "DATABASE_ERROR"
+  | "INTERNAL_ERROR";
 
 export interface DailyTaskPatch {
   title?: string;
@@ -19,6 +37,52 @@ export interface DailyTaskPatch {
   notes?: string;
 }
 
+export interface DailyTaskUpdateInput {
+  date: string;
+  slot_index: number;
+  expected_version: number;
+  patch: DailyTaskPatch;
+}
+
+export interface BatchDailyTaskUpdateInput {
+  date: string;
+  tasks: Array<{
+    slot_index: number;
+    expected_version: number;
+    patch: DailyTaskPatch;
+  }>;
+  atomic: boolean;
+}
+
+export interface PlanCreateInput {
+  id: string;
+  plan_type: PlanType;
+  title: string;
+  period_start: string;
+  period_end: string;
+  status: PlanStatus;
+  importance: string;
+  objective?: string;
+  completion_standard: string;
+  first_action: string;
+  parent_plan_id: string | null;
+  direction_id?: string | null;
+  notes: string;
+}
+
+export interface PlanUpdatePatch {
+  title?: string;
+  objective?: string;
+  period_start?: string;
+  period_end?: string;
+  status?: PlanStatus;
+  importance?: string;
+  completion_standard?: string;
+  first_action?: string;
+  parent_plan_id?: string | null;
+  notes?: string;
+}
+
 export interface MealPatch {
   content?: string;
   hydration_ml?: number;
@@ -28,12 +92,20 @@ export interface MealPatch {
 
 export interface McpRepository {
   getToday(date: string): Promise<JsonRecord>;
+  listDirections(): Promise<JsonRecord[]>;
   listPlans(filters: {
-    plan_type?: "annual" | "monthly" | "weekly";
-    status?: "draft" | "active" | "paused" | "completed" | "archived";
+    plan_type?: PlanType;
+    status?: PlanStatus;
     period_start?: string;
     period_end?: string;
   }): Promise<JsonRecord[]>;
+  getPlan(planId: string): Promise<JsonRecord>;
+  createPlan(input: PlanCreateInput): Promise<JsonRecord>;
+  updatePlan(input: {
+    plan_id: string;
+    expected_version: number;
+    patch: PlanUpdatePatch;
+  }): Promise<JsonRecord>;
   searchAccumulations(filters: {
     query?: string;
     tags?: string[];
@@ -42,12 +114,8 @@ export interface McpRepository {
     limit: number;
   }): Promise<JsonRecord[]>;
   getPeriodSummary(periodStart: string, periodEnd: string): Promise<JsonRecord>;
-  updateDailyTask(input: {
-    date: string;
-    slot_index: number;
-    expected_version: number;
-    patch: DailyTaskPatch;
-  }): Promise<JsonRecord>;
+  updateDailyTask(input: DailyTaskUpdateInput): Promise<JsonRecord>;
+  batchUpdateDailyTasks(input: BatchDailyTaskUpdateInput): Promise<JsonRecord>;
   addExercise(
     input: JsonRecord & { id: string; entry_date: string },
   ): Promise<JsonRecord>;
@@ -69,18 +137,88 @@ export interface McpRepository {
   }): Promise<JsonRecord>;
 }
 
-export class McpConflictError extends Error {
+export class McpServiceError extends Error {
   constructor(
+    public readonly code: McpErrorCode,
     message: string,
-    public readonly current: JsonRecord | null,
+    public readonly details: JsonRecord = {},
   ) {
     super(message);
-    this.name = "McpConflictError";
+    this.name = "McpServiceError";
   }
 }
 
-function throwIfError(error: { message: string } | null) {
-  if (error) throw new Error(error.message);
+export class McpConflictError extends McpServiceError {
+  readonly current: JsonRecord | null;
+
+  constructor(message: string, current: JsonRecord | null) {
+    super("VERSION_CONFLICT", message, { current });
+    this.name = "McpConflictError";
+    this.current = current;
+  }
+}
+
+interface RpcEnvelope {
+  status: "ok" | "error";
+  message: string;
+  data?: unknown;
+  code?: McpErrorCode;
+  details?: JsonRecord;
+}
+
+function throwIfError(
+  error: {
+    message: string;
+    code?: string;
+    details?: string;
+    hint?: string;
+  } | null,
+) {
+  if (!error) return;
+  throw new McpServiceError("DATABASE_ERROR", "数据库操作失败，请稍后重试。", {
+    database_code: error.code ?? "",
+    database_message: error.message,
+    database_details: error.details ?? "",
+    database_hint: error.hint ?? "",
+  });
+}
+
+function isJsonRecord(value: unknown): value is JsonRecord {
+  return Boolean(value) && typeof value === "object" && !Array.isArray(value);
+}
+
+async function callRpc<T>(
+  supabase: SupabaseClient,
+  functionName: string,
+  args: JsonRecord,
+): Promise<T> {
+  const result = await supabase.rpc(functionName, args);
+  throwIfError(result.error);
+
+  if (!isJsonRecord(result.data)) {
+    throw new McpServiceError(
+      "INTERNAL_ERROR",
+      "服务没有返回有效结果，请稍后重试。",
+      { function: functionName },
+    );
+  }
+
+  const envelope = result.data as unknown as RpcEnvelope;
+  if (envelope.status === "error") {
+    throw new McpServiceError(
+      envelope.code ?? "INTERNAL_ERROR",
+      envelope.message || "操作未完成。",
+      isJsonRecord(envelope.details) ? envelope.details : {},
+    );
+  }
+  if (envelope.status !== "ok" || !("data" in envelope)) {
+    throw new McpServiceError(
+      "INTERNAL_ERROR",
+      "服务返回结构不完整，请稍后重试。",
+      { function: functionName },
+    );
+  }
+  return envelope.data as T;
 }
 
 function buildPlanPaths(plans: JsonRecord[], directions: JsonRecord[]) {
@@ -114,9 +252,7 @@ async function getPlanContext(supabase: SupabaseClient, userId: string) {
   const [plansResult, directionsResult] = await Promise.all([
     supabase
       .from("plans")
-      .select(
-        "id,title,plan_type,parent_id,direction_id,period_start,period_end,status,progress,version",
-      )
+      .select("*")
       .eq("user_id", userId)
       .is("deleted_at", null),
     supabase
@@ -128,9 +264,104 @@ async function getPlanContext(supabase: SupabaseClient, userId: string) {
   throwIfError(plansResult.error);
   throwIfError(directionsResult.error);
   const plans = (plansResult.data ?? []) as JsonRecord[];
+  const planById = new Map(
+    plans.map((plan) => [String(plan.id), plan] as const),
+  );
   return {
     plans,
+    planById,
     paths: buildPlanPaths(plans, (directionsResult.data ?? []) as JsonRecord[]),
+  };
+}
+
+function enrichPlan(
+  plan: JsonRecord,
+  context: Awaited<ReturnType<typeof getPlanContext>>,
+) {
+  const parentId = plan.parent_id ? String(plan.parent_id) : null;
+  return {
+    ...plan,
+    parent_plan_id: parentId,
+    parent_plan: parentId ? (context.planById.get(parentId) ?? null) : null,
+    upstream_path: context.paths.get(String(plan.id)) ?? [],
+  };
+}
+
+async function enrichDailyTasks(
+  supabase: SupabaseClient,
+  userId: string,
+  tasks: JsonRecord[],
+) {
+  if (!tasks.some((task) => task.weekly_plan_id)) {
+    return tasks.map((task) => ({ ...task, upstream_path: [] }));
+  }
+  const context = await getPlanContext(supabase, userId);
+  return tasks.map((task) => ({
+    ...task,
+    upstream_path: task.weekly_plan_id
+      ? (context.paths.get(String(task.weekly_plan_id)) ?? [])
+      : [],
+  }));
+}
+
+async function getFullPlan(
+  supabase: SupabaseClient,
+  userId: string,
+  planId: string,
+) {
+  const context = await getPlanContext(supabase, userId);
+  const plan = context.planById.get(planId);
+  if (!plan) {
+    throw new McpServiceError("NOT_FOUND", "未找到该计划。", {
+      plan_id: planId,
+    });
+  }
+
+  const descendantIds = new Set<string>();
+  let frontier = [planId];
+  while (frontier.length > 0) {
+    const parents = new Set(frontier);
+    const children = context.plans
+      .filter(
+        (candidate) =>
+          candidate.parent_id &&
+          parents.has(String(candidate.parent_id)) &&
+          !descendantIds.has(String(candidate.id)),
+      )
+      .map((candidate) => String(candidate.id));
+    children.forEach((id) => descendantIds.add(id));
+    frontier = children;
+  }
+
+  const directChildCount = context.plans.filter(
+    (candidate) => String(candidate.parent_id ?? "") === planId,
+  ).length;
+  const weeklyPlanIds = context.plans
+    .filter(
+      (candidate) =>
+        candidate.plan_type === "weekly" &&
+        (String(candidate.id) === planId ||
+          descendantIds.has(String(candidate.id))),
+    )
+    .map((candidate) => String(candidate.id));
+
+  let associatedDailyTaskCount = 0;
+  if (weeklyPlanIds.length > 0) {
+    const tasksResult = await supabase
+      .from("daily_tasks")
+      .select("id", { count: "exact", head: true })
+      .eq("user_id", userId)
+      .in("weekly_plan_id", weeklyPlanIds)
+      .is("deleted_at", null);
+    throwIfError(tasksResult.error);
+    associatedDailyTaskCount = tasksResult.count ?? 0;
+  }
+
+  return {
+    ...enrichPlan(plan, context),
+    child_plan_count: directChildCount,
+    descendant_plan_count: descendantIds.size,
+    associated_daily_task_count: associatedDailyTaskCount,
   };
 }
 
@@ -183,6 +414,18 @@ export function createSupabaseMcpRepository(
       };
     },
 
+    async listDirections() {
+      const result = await supabase
+        .from("directions")
+        .select("*")
+        .eq("user_id", userId)
+        .is("deleted_at", null)
+        .is("archived_at", null)
+        .order("sort_order", { ascending: true });
+      throwIfError(result.error);
+      return (result.data ?? []) as JsonRecord[];
+    },
+
     async listPlans(filters) {
       let query = supabase
         .from("plans")
@@ -191,7 +434,11 @@ export function createSupabaseMcpRepository(
         .is("deleted_at", null)
         .order("period_start", { ascending: false });
       if (filters.plan_type) query = query.eq("plan_type", filters.plan_type);
-      if (filters.status) query = query.eq("status", filters.status);
+      if (filters.status) {
+        query = query.eq("status", filters.status);
+      } else {
+        query = query.neq("status", "archived").is("archived_at", null);
+      }
       if (filters.period_start)
         query = query.gte("period_end", filters.period_start);
       if (filters.period_end)
@@ -202,9 +449,49 @@ export function createSupabaseMcpRepository(
       ]);
       throwIfError(result.error);
       return ((result.data ?? []) as JsonRecord[]).map((plan) => ({
-        ...plan,
-        upstream_path: context.paths.get(String(plan.id)) ?? [],
+        ...enrichPlan(plan, context),
       }));
+    },
+
+    async getPlan(planId) {
+      return getFullPlan(supabase, userId, planId);
+    },
+
+    async createPlan(input) {
+      const rpcData = await callRpc<JsonRecord>(supabase, "mcp_create_plan", {
+        p_id: input.id,
+        p_plan_type: input.plan_type,
+        p_title: input.title,
+        p_period_start: input.period_start,
+        p_period_end: input.period_end,
+        p_status: input.status,
+        p_importance: input.importance,
+        p_objective: input.objective ?? "",
+        p_completion_standard: input.completion_standard,
+        p_first_action: input.first_action,
+        p_parent_plan_id: input.parent_plan_id,
+        p_direction_id: input.direction_id ?? null,
+        p_notes: input.notes,
+      });
+      const fullPlan = await getFullPlan(supabase, userId, String(rpcData.id));
+      return {
+        ...fullPlan,
+        warnings: Array.isArray(rpcData.warnings) ? rpcData.warnings : [],
+        idempotent_replay: rpcData.idempotent_replay === true,
+      };
+    },
+
+    async updatePlan(input) {
+      const rpcData = await callRpc<JsonRecord>(supabase, "mcp_update_plan", {
+        p_plan_id: input.plan_id,
+        p_expected_version: input.expected_version,
+        p_patch: input.patch,
+      });
+      const fullPlan = await getFullPlan(supabase, userId, String(rpcData.id));
+      return {
+        ...fullPlan,
+        warnings: Array.isArray(rpcData.warnings) ? rpcData.warnings : [],
+      };
     },
 
     async searchAccumulations(filters) {
@@ -328,32 +615,36 @@ export function createSupabaseMcpRepository(
     },
 
     async updateDailyTask(input) {
-      const result = await supabase
-        .from("daily_tasks")
-        .update(input.patch)
-        .eq("user_id", userId)
-        .eq("entry_date", input.date)
-        .eq("slot_index", input.slot_index)
-        .eq("version", input.expected_version)
-        .is("deleted_at", null)
-        .select()
-        .maybeSingle();
-      throwIfError(result.error);
-      if (result.data) return result.data as JsonRecord;
-
-      const current = await supabase
-        .from("daily_tasks")
-        .select("*")
-        .eq("user_id", userId)
-        .eq("entry_date", input.date)
-        .eq("slot_index", input.slot_index)
-        .is("deleted_at", null)
-        .maybeSingle();
-      throwIfError(current.error);
-      throw new McpConflictError(
-        "这条任务已在其他设备上发生变化，请先读取当前版本再决定是否修改。",
-        (current.data as JsonRecord | null) ?? null,
+      const task = await callRpc<JsonRecord>(
+        supabase,
+        "mcp_update_daily_task",
+        {
+          p_entry_date: input.date,
+          p_slot_index: input.slot_index,
+          p_expected_version: input.expected_version,
+          p_patch: input.patch,
+        },
       );
+      return (await enrichDailyTasks(supabase, userId, [task]))[0];
+    },
+
+    async batchUpdateDailyTasks(input) {
+      const data = await callRpc<JsonRecord>(
+        supabase,
+        "mcp_batch_update_daily_tasks",
+        {
+          p_entry_date: input.date,
+          p_tasks: input.tasks,
+          p_atomic: input.atomic,
+        },
+      );
+      const tasks = Array.isArray(data.tasks)
+        ? (data.tasks as JsonRecord[])
+        : [];
+      return {
+        ...data,
+        tasks: await enrichDailyTasks(supabase, userId, tasks),
+      };
     },
 
     async addExercise(input) {
@@ -505,7 +796,11 @@ export function createE2eMcpRepository(): McpRepository {
   };
   return {
     getToday: async (date) => emptyToday(date),
+    listDirections: async () => [],
     listPlans: async () => [],
+    getPlan: unavailable,
+    createPlan: unavailable,
+    updatePlan: unavailable,
     searchAccumulations: async () => [],
     getPeriodSummary: async (periodStart, periodEnd) => ({
       period_start: periodStart,
@@ -520,6 +815,7 @@ export function createE2eMcpRepository(): McpRepository {
       meal_record_days: 0,
     }),
     updateDailyTask: unavailable,
+    batchUpdateDailyTasks: unavailable,
     addExercise: unavailable,
     upsertMeal: unavailable,
     addAccumulation: unavailable,

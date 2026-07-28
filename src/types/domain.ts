@@ -1,9 +1,5 @@
 export type SyncStatus =
-  | "synced"
-  | "pending"
-  | "syncing"
-  | "failed"
-  | "conflict";
+  "synced" | "pending" | "syncing" | "failed" | "conflict";
 
 export type DirectionKind =
   | "mission"
@@ -16,11 +12,7 @@ export type DirectionKind =
 
 export type PlanType = "annual" | "monthly" | "weekly";
 export type PlanStatus =
-  | "draft"
-  | "active"
-  | "paused"
-  | "completed"
-  | "archived";
+  "draft" | "active" | "paused" | "completed" | "archived";
 
 export type TaskStatus =
   | "not_started"
@@ -52,9 +44,11 @@ export interface Plan extends BaseRecord {
   plan_type: PlanType;
   title: string;
   objective: string;
+  importance?: string;
   period_start: string;
   period_end: string;
   completion_standard: string;
+  first_action?: string;
   status: PlanStatus;
   parent_id: string | null;
   direction_id: string | null;

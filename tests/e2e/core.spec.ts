@@ -205,3 +205,92 @@ test("MCP advertises OAuth and completes the protocol handshake", async ({
     "shouzhong-daily",
   );
 });
+
+test("MCP lists the write tools and keeps the sixth call addressable", async ({
+  request,
+}) => {
+  const headers = {
+    authorization: "Bearer e2e-mcp-token",
+    accept: "application/json, text/event-stream",
+    "content-type": "application/json",
+  };
+  const toolsResponse = await request.post("/mcp", {
+    headers,
+    data: {
+      jsonrpc: "2.0",
+      id: 10,
+      method: "tools/list",
+      params: {},
+    },
+  });
+  expect(toolsResponse.ok()).toBeTruthy();
+  const toolsBody = await toolsResponse.json();
+  expect(
+    toolsBody.result.tools.map((tool: { name: string }) => tool.name),
+  ).toEqual(
+    expect.arrayContaining([
+      "list_directions",
+      "update_daily_task",
+      "batch_update_daily_tasks",
+      "get_plan",
+      "create_plan",
+      "update_plan",
+    ]),
+  );
+  expect(
+    toolsBody.result.tools.find(
+      (tool: { name: string }) => tool.name === "batch_update_daily_tasks",
+    ).securitySchemes,
+  ).toEqual([{ type: "oauth2", scopes: ["openid", "email", "profile"] }]);
+
+  for (let slotIndex = 1; slotIndex <= 6; slotIndex += 1) {
+    const response = await request.post("/mcp", {
+      headers,
+      data: {
+        jsonrpc: "2.0",
+        id: 10 + slotIndex,
+        method: "tools/call",
+        params: {
+          name: "update_daily_task",
+          arguments: {
+            date: "2026-07-28",
+            slot_index: slotIndex,
+            expected_version: 1,
+            patch: { title: `位置 ${slotIndex}` },
+          },
+        },
+      },
+    });
+    expect(response.ok()).toBeTruthy();
+    const body = await response.json();
+    expect(body.result).toBeDefined();
+    expect(body.error).toBeUndefined();
+    expect(body.result.content[0].text).toBeTruthy();
+    expect(body.result.structuredContent).toMatchObject({
+      status: "error",
+      code: "INTERNAL_ERROR",
+    });
+  }
+
+  const invalidSlot = await request.post("/mcp", {
+    headers,
+    data: {
+      jsonrpc: "2.0",
+      id: 20,
+      method: "tools/call",
+      params: {
+        name: "update_daily_task",
+        arguments: {
+          date: "2026-07-28",
+          slot_index: 7,
+          expected_version: 1,
+          patch: { title: "非法位置" },
+        },
+      },
+    },
+  });
+  expect((await invalidSlot.json()).result.structuredContent).toMatchObject({
+    status: "error",
+    code: "INVALID_ARGUMENT",
+  });
+});
