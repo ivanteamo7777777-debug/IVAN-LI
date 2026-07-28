@@ -14,10 +14,21 @@ select col_is_unique(
   array['user_id', 'entry_date', 'slot_index'],
   'each user has one record per date and slot'
 );
-select col_isnt_unique(
-  'public',
-  'exercise_logs',
-  array['user_id', 'entry_date'],
+select ok(
+  not exists (
+    select 1
+    from pg_index index_record
+    where index_record.indrelid = 'public.exercise_logs'::regclass
+      and index_record.indisunique
+      and (
+        select array_agg(attribute_record.attname::text order by key_record.ordinality)
+        from unnest(index_record.indkey) with ordinality
+          as key_record(attnum, ordinality)
+        join pg_attribute attribute_record
+          on attribute_record.attrelid = index_record.indrelid
+          and attribute_record.attnum = key_record.attnum
+      ) = array['user_id', 'entry_date']::text[]
+  ),
   'each day may contain multiple independent exercise records'
 );
 select col_is_unique(
