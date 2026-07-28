@@ -74,6 +74,23 @@ describe("production contracts", () => {
     expect(sw).toContain('url: "/offline"');
     expect(sw).toContain('self.addEventListener("push"');
     expect(sw).toContain('self.addEventListener("notificationclick"');
+    expect(sw).toContain("shouldCacheAuthenticatedNavigation");
+    expect(sw).toContain("shouzhong-authenticated-shell-v2");
+  });
+
+  it("persists password sessions through a server-set cookie response", () => {
+    const login = fs.readFileSync(
+      path.join(root, "src/components/login-form.tsx"),
+      "utf8",
+    );
+    const route = fs.readFileSync(
+      path.join(root, "src/app/api/auth/password/route.ts"),
+      "utf8",
+    );
+    expect(login).toContain('fetch("/api/auth/password"');
+    expect(login).toContain("supabase.auth.getSession()");
+    expect(route).toContain("createRouteClient(request, response)");
+    expect(route).not.toContain("console.");
   });
 
   it("keeps MCP on user OAuth and exposes a protected-resource challenge", () => {

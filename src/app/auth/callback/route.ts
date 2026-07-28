@@ -1,17 +1,20 @@
-import { NextResponse } from "next/server";
-import { createClient } from "@/lib/supabase/server";
+import { type NextRequest, NextResponse } from "next/server";
+import { createRouteClient } from "@/lib/supabase/route";
 import { safeInternalPath } from "@/lib/safe-redirect";
 
-export async function GET(request: Request) {
+export async function GET(request: NextRequest) {
   const url = new URL(request.url);
   const code = url.searchParams.get("code");
   const next = safeInternalPath(url.searchParams.get("next"));
   if (code) {
-    const supabase = await createClient();
+    const response = NextResponse.redirect(new URL(next, url.origin));
+    const supabase = createRouteClient(request, response);
     const { error } = await supabase.auth.exchangeCodeForSession(code);
-    if (!error) return NextResponse.redirect(new URL(next, url.origin));
+    if (!error) return response;
   }
-  return NextResponse.redirect(
+  const response = NextResponse.redirect(
     new URL("/auth/login?error=callback", url.origin),
   );
+  response.headers.set("Cache-Control", "private, no-store");
+  return response;
 }

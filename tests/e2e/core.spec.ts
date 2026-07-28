@@ -96,7 +96,7 @@ test("multiple exercise sessions persist independently on the same day", async (
   await activities.nth(0).blur();
   await activities.nth(1).fill("晚间拉伸");
   await activities.nth(1).blur();
-  await page.waitForTimeout(100);
+  await page.waitForTimeout(600);
   await page.reload();
 
   const persisted = page

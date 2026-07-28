@@ -130,16 +130,15 @@ export function SyncProvider({
     let cancelled = false;
     async function warmAuthenticatedShell() {
       if (!("serviceWorker" in navigator)) return;
+      if (navigator.serviceWorker.controller) return;
       await navigator.serviceWorker.ready;
-      if (!navigator.serviceWorker.controller) {
-        await new Promise<void>((resolve) => {
-          navigator.serviceWorker.addEventListener(
-            "controllerchange",
-            () => resolve(),
-            { once: true },
-          );
-        });
-      }
+      await new Promise<void>((resolve) => {
+        navigator.serviceWorker.addEventListener(
+          "controllerchange",
+          () => resolve(),
+          { once: true },
+        );
+      });
       if (!cancelled && navigator.onLine) {
         await fetch("/today", { credentials: "same-origin" });
       }

@@ -1,11 +1,11 @@
 import { defaultCache } from "@serwist/next/worker";
 import type { PrecacheEntry, SerwistGlobalConfig } from "serwist";
 import {
-  CacheableResponsePlugin,
   ExpirationPlugin,
   NetworkFirst,
   Serwist,
 } from "serwist";
+import { shouldCacheAuthenticatedNavigation } from "@/lib/pwa-cache";
 
 declare global {
   interface WorkerGlobalScope extends SerwistGlobalConfig {
@@ -14,6 +14,24 @@ declare global {
 }
 
 declare const self: ServiceWorkerGlobalScope;
+
+const AUTHENTICATED_SHELL_CACHE = "shouzhong-authenticated-shell-v2";
+
+self.addEventListener("activate", (event) => {
+  event.waitUntil(
+    caches.keys().then((names) =>
+      Promise.all(
+        names
+          .filter(
+            (name) =>
+              name.startsWith("shouzhong-authenticated-shell") &&
+              name !== AUTHENTICATED_SHELL_CACHE,
+          )
+          .map((name) => caches.delete(name)),
+      ),
+    ),
+  );
+});
 
 self.addEventListener("push", (event) => {
   if (!event.data) return;
@@ -82,10 +100,13 @@ const serwist = new Serwist({
         );
       },
       handler: new NetworkFirst({
-        cacheName: "shouzhong-authenticated-shell",
-        networkTimeoutSeconds: 3,
+        cacheName: AUTHENTICATED_SHELL_CACHE,
+        networkTimeoutSeconds: 8,
         plugins: [
-          new CacheableResponsePlugin({ statuses: [0, 200] }),
+          {
+            cacheWillUpdate: async ({ response }) =>
+              shouldCacheAuthenticatedNavigation(response) ? response : null,
+          },
           new ExpirationPlugin({ maxEntries: 24, maxAgeSeconds: 60 * 60 * 24 * 7 }),
         ],
       }),

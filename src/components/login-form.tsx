@@ -1,6 +1,6 @@
 "use client";
 
-import { useState } from "react";
+import { useEffect, useState } from "react";
 import { useRouter } from "next/navigation";
 import Image from "next/image";
 import { ArrowRight, Mail } from "lucide-react";
@@ -25,33 +25,74 @@ export function LoginForm({
   const [email, setEmail] = useState("");
   const [password, setPassword] = useState("");
   const [loading, setLoading] = useState(false);
+  const [checkingSession, setCheckingSession] = useState(!e2e);
+
+  useEffect(() => {
+    if (e2e) return;
+    let cancelled = false;
+
+    async function recoverExistingSession() {
+      const supabase = createClient();
+      for (let attempt = 0; attempt < 2; attempt += 1) {
+        const {
+          data: { session },
+        } = await supabase.auth.getSession();
+        if (session) {
+          if (!cancelled) {
+            router.replace(destination);
+            router.refresh();
+          }
+          return;
+        }
+        if (attempt === 0) {
+          await new Promise((resolve) => setTimeout(resolve, 350));
+        }
+      }
+      if (!cancelled) setCheckingSession(false);
+    }
+
+    void recoverExistingSession().catch(() => {
+      if (!cancelled) setCheckingSession(false);
+    });
+    return () => {
+      cancelled = true;
+    };
+  }, [destination, e2e, router]);
 
   async function submit(event: React.FormEvent) {
     event.preventDefault();
     if (e2e) {
-      router.push(destination);
+      window.location.assign(destination);
       return;
     }
     setLoading(true);
     try {
-      const supabase = createClient();
-      const { error } =
-        mode === "login"
-          ? await supabase.auth.signInWithPassword({ email, password })
-          : await supabase.auth.signUp({
-              email,
-              password,
-              options: {
-                emailRedirectTo: `${window.location.origin}/auth/callback?next=${encodeURIComponent(destination)}`,
-              },
-            });
-      if (error) throw error;
       if (mode === "signup") {
+        const supabase = createClient();
+        const { error } = await supabase.auth.signUp({
+          email,
+          password,
+          options: {
+            emailRedirectTo: `${window.location.origin}/auth/callback?next=${encodeURIComponent(destination)}`,
+          },
+        });
+        if (error) throw error;
         toast.success("注册成功，请检查邮箱完成确认");
-      } else {
-        router.replace(destination);
-        router.refresh();
+        return;
       }
+
+      const response = await fetch("/api/auth/password", {
+        method: "POST",
+        credentials: "same-origin",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ email, password }),
+      });
+      const result = (await response.json()) as {
+        error?: string;
+      };
+      if (!response.ok) throw new Error(result.error ?? "登录失败");
+      router.replace(destination);
+      router.refresh();
     } catch (error) {
       toast.error(error instanceof Error ? error.message : "登录失败");
     } finally {
@@ -125,8 +166,8 @@ export function LoginForm({
               required={!e2e}
             />
           </div>
-          <Button className="w-full" disabled={loading}>
-            {loading
+          <Button className="w-full" disabled={loading || checkingSession}>
+            {loading || checkingSession
               ? "请稍候…"
               : e2e
                 ? "进入本地测试库"
@@ -142,7 +183,7 @@ export function LoginForm({
               variant="secondary"
               className="mt-3 w-full"
               onClick={magicLink}
-              disabled={!email || loading}
+              disabled={!email || loading || checkingSession}
             >
               <Mail />
               发送免密登录链接

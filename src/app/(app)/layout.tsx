@@ -19,11 +19,13 @@ export default async function AuthenticatedLayout({
   if (!localOnly) {
     if (!hasSupabaseEnv()) redirect("/setup");
     const supabase = await createClient();
-    const {
-      data: { user: supabaseUser },
-    } = await supabase.auth.getUser();
-    if (!supabaseUser) redirect("/auth/login");
-    user = { id: supabaseUser.id, email: supabaseUser.email ?? "个人管理库" };
+    const { data } = await supabase.auth.getClaims();
+    const claims = data?.claims;
+    if (!claims?.sub) redirect("/auth/login?next=/today");
+    user = {
+      id: claims.sub,
+      email: typeof claims.email === "string" ? claims.email : "个人管理库",
+    };
   }
 
   const resolvedUser = user!;
