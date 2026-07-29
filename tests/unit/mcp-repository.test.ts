@@ -308,6 +308,7 @@ describe("MCP Supabase repository", () => {
     const patch = {
       title: "已校准的年度计划",
       notes: "只修改允许字段",
+      parent_plan_id: null,
     };
     const updatedPlan = {
       id: planId,

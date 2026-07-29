@@ -268,18 +268,11 @@ const planCreateSchema = z
           message: "年度计划不能设置上级计划",
         });
       }
-      if (value.direction_id === null) {
-        context.addIssue({
-          code: "custom",
-          path: ["direction_id"],
-          message: "年度计划必须关联当前用户的方向",
-        });
-      }
-    } else if (value.parent_plan_id === null) {
+    } else if (value.direction_id !== null) {
       context.addIssue({
         code: "custom",
-        path: ["parent_plan_id"],
-        message: "月度和每周计划必须设置上级计划",
+        path: ["direction_id"],
+        message: "月度和每周计划不能直接关联方向",
       });
     }
   });
@@ -388,7 +381,7 @@ export function createShouzhongMcpServer(
   const server = new McpServer(
     {
       name: "shouzhong-daily",
-      version: "1.1.0",
+      version: "1.2.0",
     },
     {
       instructions:
@@ -423,7 +416,7 @@ export function createShouzhongMcpServer(
     {
       title: "读取方向",
       description:
-        "读取当前用户未删除、未归档的方向及其 UUID。新增年度计划前先调用本工具取得 direction_id；本工具只读，不会修改方向。",
+        "读取当前用户未删除、未归档的方向及其 UUID。仅在年度计划需要关联方向时调用本工具取得 direction_id；方向也可以不选。本工具只读，不会修改方向。",
       inputSchema: {},
       outputSchema,
       annotations: readAnnotations,
@@ -488,7 +481,7 @@ export function createShouzhongMcpServer(
     {
       title: "新增计划",
       description:
-        "新增年度、月度或周计划。需要用户在当前对话中明确确认。客户端提供 UUID 作为幂等键，相同 ID 不得重复创建。月计划必须关联年计划，周计划必须关联月计划；年度计划必须通过 direction_id 关联当前用户的方向。非自然周、月、年只返回 warning，不会强制阻止。",
+        "新增年度、月度或周计划。需要用户在当前对话中明确确认。客户端提供 UUID 作为幂等键，相同 ID 不得重复创建。方向和上级计划均可不选，计划可以独立创建；如果选择关联，月计划只能关联年计划，周计划只能关联月计划。非自然周、月、年只返回 warning，不会强制阻止。",
       inputSchema: {
         id: z.string().describe("客户端生成的幂等 UUID"),
         plan_type: z.string().describe("annual | monthly | weekly"),
@@ -507,12 +500,12 @@ export function createShouzhongMcpServer(
           .string()
           .nullable()
           .optional()
-          .describe("月计划的年计划父级，或周计划的月计划父级"),
+          .describe("可选。月计划的年计划父级，或周计划的月计划父级"),
         direction_id: z
           .string()
           .nullable()
           .optional()
-          .describe("年度计划必须关联的方向 UUID"),
+          .describe("年度计划可选关联的方向 UUID"),
         notes: z.string().optional(),
       },
       outputSchema,
@@ -542,7 +535,7 @@ export function createShouzhongMcpServer(
     {
       title: "修改计划",
       description:
-        "修改现有计划。调用前必须先读取当前计划并取得 version，写入时携带 expected_version，且需要用户在当前对话中明确确认。不得自动延期、覆盖或改变计划层级；修改父计划时会重新校验层级与循环引用。",
+        "修改现有计划。调用前必须先读取当前计划并取得 version，写入时携带 expected_version，且需要用户在当前对话中明确确认。不得自动延期或覆盖其他计划。parent_plan_id 可以设为 null 以取消上下级关系；选择新父计划时会重新校验层级与循环引用。",
       inputSchema: {
         plan_id: z.string().describe("计划 UUID"),
         expected_version: z.number().int().describe("读取到的当前 version"),

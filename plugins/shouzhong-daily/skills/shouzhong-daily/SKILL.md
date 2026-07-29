@@ -60,10 +60,10 @@ To update multiple daily slots:
 
 To create a plan:
 
-1. Read parents with `list_plans`; call `list_directions` to obtain the direction UUID for an annual plan.
+1. If the user wants a relationship, read parents with `list_plans`; call `list_directions` only when an annual plan should link to a direction.
 2. Confirm the complete plan with the user.
 3. Generate one UUID and keep it for retries.
-4. Call `create_plan`. Annual plans require `direction_id`; monthly plans require an annual parent; weekly plans require a monthly parent.
+4. Call `create_plan`. Relationships are optional: annual plans may omit `direction_id`, and monthly or weekly plans may omit `parent_plan_id`. When selected, monthly parents must be annual and weekly parents must be monthly.
 
 To update a plan:
 

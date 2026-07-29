@@ -107,6 +107,56 @@ test("multiple exercise sessions persist independently on the same day", async (
   await expect(persisted.nth(1)).toHaveValue("晚间拉伸");
 });
 
+test("annual, monthly and weekly plans can be saved without relationships", async ({
+  page,
+  browserName,
+}) => {
+  test.skip(
+    browserName !== "chromium",
+    "The optional plan relationship workflow is covered once in Chromium.",
+  );
+
+  await page.goto("/plans");
+  await expect(page.getByTestId("plans-view")).toHaveAttribute(
+    "data-ready",
+    "true",
+  );
+
+  async function createIndependentPlan(
+    planType: "年度计划" | "月度计划" | "每周计划",
+    title: string,
+  ) {
+    await page.getByRole("button", { name: "新增计划" }).click();
+    if (planType !== "年度计划") {
+      await page.getByTestId("plan-type-select").click();
+      await page.getByRole("option", { name: planType }).click();
+      await expect(page.getByTestId("plan-parent-select")).toContainText(
+        "不关联上级计划",
+      );
+    } else {
+      await expect(page.getByTestId("plan-direction-select")).toContainText(
+        "不关联方向",
+      );
+    }
+    await page.getByTestId("plan-title-input").fill(title);
+    await page.getByTestId("plan-objective-input").fill("保持独立执行");
+    await page.getByTestId("plan-completion-input").fill("完成并复盘");
+    await page.getByTestId("plan-save").click();
+    await expect(page.getByRole("heading", { name: title })).toBeVisible();
+  }
+
+  await createIndependentPlan("年度计划", "独立年度计划");
+  await createIndependentPlan("月度计划", "独立月计划");
+  await createIndependentPlan("每周计划", "独立周计划");
+
+  await page.reload();
+  await expect(
+    page.getByRole("heading", { name: "独立年度计划" }),
+  ).toBeVisible();
+  await expect(page.getByRole("heading", { name: "独立月计划" })).toBeVisible();
+  await expect(page.getByRole("heading", { name: "独立周计划" })).toBeVisible();
+});
+
 test("AI suggestions remain a draft until explicit confirmation", async ({
   page,
   browserName,

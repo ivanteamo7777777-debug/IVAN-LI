@@ -1,7 +1,7 @@
 begin;
 create extension if not exists pgtap with schema extensions;
 
-select plan(49);
+select plan(65);
 
 select has_column(
   'public',
@@ -184,6 +184,276 @@ select is(
   'ok'::text,
   'weekly plan can be linked to monthly plan'
 );
+
+select is(
+  (
+    public.mcp_create_plan(
+      '10000000-0000-0000-0000-000000000010',
+      'annual',
+      '独立年度计划',
+      '2026-01-01',
+      '2026-12-31',
+      'active',
+      '',
+      '',
+      '',
+      '',
+      null,
+      null,
+      ''
+    ) ->> 'status'
+  )::text,
+  'ok'::text,
+  'an annual plan can be created without a direction'
+);
+
+select is(
+  (
+    public.mcp_create_plan(
+      '10000000-0000-0000-0000-000000000011',
+      'monthly',
+      '独立月计划',
+      '2026-08-01',
+      '2026-08-31',
+      'active',
+      '',
+      '',
+      '',
+      '',
+      null,
+      null,
+      ''
+    ) ->> 'status'
+  )::text,
+  'ok'::text,
+  'a monthly plan can be created without a parent'
+);
+
+select is(
+  (
+    public.mcp_create_plan(
+      '10000000-0000-0000-0000-000000000012',
+      'weekly',
+      '独立周计划',
+      '2026-08-03',
+      '2026-08-09',
+      'active',
+      '',
+      '',
+      '',
+      '',
+      null,
+      null,
+      ''
+    ) ->> 'status'
+  )::text,
+  'ok'::text,
+  'a weekly plan can be created without a parent'
+);
+
+select is(
+  (
+    select count(*)::integer
+    from public.plans
+    where id in (
+      '10000000-0000-0000-0000-000000000010',
+      '10000000-0000-0000-0000-000000000011',
+      '10000000-0000-0000-0000-000000000012'
+    )
+      and parent_id is null
+      and direction_id is null
+  ),
+  3,
+  'independent annual, monthly and weekly plans persist without relationships'
+);
+
+select is(
+  jsonb_array_length(
+    public.mcp_plan_upstream_path(
+      '10000000-0000-0000-0000-000000000012',
+      auth.uid()
+    )
+  ),
+  1,
+  'an independent weekly plan path only contains itself'
+);
+
+select is(
+  (
+    public.mcp_create_plan(
+      '10000000-0000-0000-0000-000000000013',
+      'weekly',
+      '可解除关联的周计划',
+      '2026-08-10',
+      '2026-08-16',
+      'active',
+      '',
+      '',
+      '',
+      '',
+      '10000000-0000-0000-0000-000000000002',
+      null,
+      ''
+    ) ->> 'status'
+  )::text,
+  'ok'::text,
+  'a weekly plan can start with a valid parent'
+);
+
+select is(
+  (
+    public.mcp_update_plan(
+      '10000000-0000-0000-0000-000000000013',
+      1,
+      '{"parent_plan_id":null}'::jsonb
+    ) ->> 'status'
+  )::text,
+  'ok'::text,
+  'a weekly plan can remove its parent'
+);
+
+select ok(
+  (
+    select parent_id is null and version = 2
+    from public.plans
+    where id = '10000000-0000-0000-0000-000000000013'
+  ),
+  'removing a parent persists null and increments the version'
+);
+
+select is(
+  jsonb_array_length(
+    public.mcp_plan_upstream_path(
+      '10000000-0000-0000-0000-000000000013',
+      auth.uid()
+    )
+  ),
+  1,
+  'a detached weekly plan path only contains itself'
+);
+
+select is(
+  (
+    public.mcp_update_plan(
+      '10000000-0000-0000-0000-000000000013',
+      2,
+      jsonb_build_object(
+        'parent_plan_id',
+        '10000000-0000-0000-0000-000000000002'
+      )
+    ) ->> 'status'
+  )::text,
+  'ok'::text,
+  'a detached weekly plan can select a valid parent again'
+);
+
+select ok(
+  (
+    select
+      parent_id = '10000000-0000-0000-0000-000000000002'
+      and version = 3
+    from public.plans
+    where id = '10000000-0000-0000-0000-000000000013'
+  ),
+  'reattaching a parent persists the relationship and increments the version'
+);
+
+select is(
+  (
+    public.mcp_update_plan(
+      '10000000-0000-0000-0000-000000000013',
+      2,
+      '{"parent_plan_id":null}'::jsonb
+    ) ->> 'code'
+  )::text,
+  'VERSION_CONFLICT'::text,
+  'a stale request cannot detach a plan'
+);
+
+select is(
+  (
+    select parent_id::text
+    from public.plans
+    where id = '10000000-0000-0000-0000-000000000013'
+  ),
+  '10000000-0000-0000-0000-000000000002'::text,
+  'a failed stale detach keeps the existing parent'
+);
+
+select is(
+  (
+    public.mcp_update_plan(
+      '10000000-0000-0000-0000-000000000010',
+      1,
+      '{"notes":"保持独立"}'::jsonb
+    ) ->> 'status'
+  )::text,
+  'ok'::text,
+  'an independent annual plan can be updated'
+);
+
+reset role;
+set local role service_role;
+
+select lives_ok(
+  $$
+    insert into public.plans (
+      id,
+      user_id,
+      plan_type,
+      title,
+      period_start,
+      period_end,
+      parent_id,
+      direction_id
+    )
+    values (
+      '10000000-0000-0000-0000-000000000014',
+      '90000000-0000-0000-0000-000000000001',
+      'monthly',
+      '服务端独立月计划',
+      '2026-09-01',
+      '2026-09-30',
+      null,
+      null
+    )
+  $$,
+  'service_role can write an independent plan through the hierarchy trigger'
+);
+
+select throws_ok(
+  $$
+    insert into public.plans (
+      id,
+      user_id,
+      plan_type,
+      title,
+      period_start,
+      period_end,
+      parent_id,
+      direction_id
+    )
+    values (
+      '10000000-0000-0000-0000-000000000015',
+      '90000000-0000-0000-0000-000000000001',
+      'weekly',
+      '服务端非法周计划',
+      '2026-09-07',
+      '2026-09-13',
+      '10000000-0000-0000-0000-000000000001',
+      null
+    )
+  $$,
+  '23514',
+  '周计划只能关联月计划。',
+  'service_role receives the intended hierarchy error instead of a permission error'
+);
+
+reset role;
+set local role authenticated;
+set local "request.jwt.claim.sub" =
+  '90000000-0000-0000-0000-000000000001';
+set local "request.jwt.claim.role" = 'authenticated';
 
 select is(
   (

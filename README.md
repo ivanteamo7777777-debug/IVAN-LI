@@ -15,7 +15,7 @@
 ## 已实现
 
 - 方向库：Mission、Vision、Value、人生方向与阶段边界，可排序、归档并关联计划。
-- 计划库：年度 → 月度 → 每周的严格父子关系，支持列表、时间视图、筛选、路径、进度与温和逾期提示。
+- 计划库：年度、月度、每周计划均可独立存在，也可按需建立合法的上下级关系；支持列表、时间视图、筛选、路径、进度与温和逾期提示。
 - 今日执行：每天恰好六个独立编号位置；运动和四类饮食记录完全独立。
 - 长期积累库：从已完成任务显式收录可复用成果，支持标签、搜索、来源回溯和附件。
 - 复盘库：日、周、月、年度复盘；自动统计只生成可编辑草稿。
@@ -47,20 +47,20 @@
 
 复制 `.env.example` 为 `.env.local`，只在本机或 Vercel 项目设置中填写：
 
-| 变量 | 使用位置 | 说明 |
-| --- | --- | --- |
-| `NEXT_PUBLIC_SUPABASE_URL` | 浏览器/服务端 | Supabase 项目 URL |
-| `NEXT_PUBLIC_SUPABASE_PUBLISHABLE_KEY` | 浏览器/服务端 | 可公开的 publishable key，实际权限由 RLS 约束 |
-| `SUPABASE_SECRET_KEY` | 仅服务端 | 删除账号和定时推送使用；严禁添加 `NEXT_PUBLIC_` |
-| `OPENAI_API_KEY` | 仅服务端 | 可选；未配置时 AI 功能返回可读提示 |
-| `OPENAI_MODEL` | 仅服务端 | 可选；默认 `gpt-5.6-sol` |
-| `NEXT_PUBLIC_VAPID_PUBLIC_KEY` | 浏览器 | Web Push 公钥 |
-| `VAPID_PRIVATE_KEY` | 仅服务端 | Web Push 私钥 |
-| `VAPID_SUBJECT` | 仅服务端 | 如 `mailto:owner@example.com` |
-| `CRON_SECRET` | 仅服务端 | 保护 `/api/push/send-due` |
-| `NEXT_PUBLIC_SITE_URL` | 浏览器/服务端 | 正式域名，例如 `https://example.vercel.app` |
-| `APP_URL` | 仅服务端 | MCP 受保护资源的正式域名，例如 `https://shouzhong-daily.vercel.app` |
-| `NEXT_PUBLIC_E2E_MODE` | 仅自动化测试 | 生产环境不要配置 |
+| 变量                                   | 使用位置      | 说明                                                                |
+| -------------------------------------- | ------------- | ------------------------------------------------------------------- |
+| `NEXT_PUBLIC_SUPABASE_URL`             | 浏览器/服务端 | Supabase 项目 URL                                                   |
+| `NEXT_PUBLIC_SUPABASE_PUBLISHABLE_KEY` | 浏览器/服务端 | 可公开的 publishable key，实际权限由 RLS 约束                       |
+| `SUPABASE_SECRET_KEY`                  | 仅服务端      | 删除账号和定时推送使用；严禁添加 `NEXT_PUBLIC_`                     |
+| `OPENAI_API_KEY`                       | 仅服务端      | 可选；未配置时 AI 功能返回可读提示                                  |
+| `OPENAI_MODEL`                         | 仅服务端      | 可选；默认 `gpt-5.6-sol`                                            |
+| `NEXT_PUBLIC_VAPID_PUBLIC_KEY`         | 浏览器        | Web Push 公钥                                                       |
+| `VAPID_PRIVATE_KEY`                    | 仅服务端      | Web Push 私钥                                                       |
+| `VAPID_SUBJECT`                        | 仅服务端      | 如 `mailto:owner@example.com`                                       |
+| `CRON_SECRET`                          | 仅服务端      | 保护 `/api/push/send-due`                                           |
+| `NEXT_PUBLIC_SITE_URL`                 | 浏览器/服务端 | 正式域名，例如 `https://example.vercel.app`                         |
+| `APP_URL`                              | 仅服务端      | MCP 受保护资源的正式域名，例如 `https://shouzhong-daily.vercel.app` |
+| `NEXT_PUBLIC_E2E_MODE`                 | 仅自动化测试  | 生产环境不要配置                                                    |
 
 仓库不读取或提交任何真实密钥，客户端代码也不会引用服务端密钥。
 

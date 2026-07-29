@@ -1,6 +1,6 @@
 "use client";
 
-import { useMemo, useState } from "react";
+import { useMemo, useState, useSyncExternalStore } from "react";
 import { format, isBefore, parseISO } from "date-fns";
 import {
   Archive,
@@ -67,7 +67,16 @@ const initialForm = {
   notes: "",
 };
 
+const subscribeToHydration = () => () => undefined;
+const getClientHydrationSnapshot = () => true;
+const getServerHydrationSnapshot = () => false;
+
 export function PlansView() {
+  const ready = useSyncExternalStore(
+    subscribeToHydration,
+    getClientHydrationSnapshot,
+    getServerHydrationSnapshot,
+  );
   const { userId } = useSync();
   const plans = useRecords<Plan>("plans", userId);
   const directions = useRecords<Direction>("directions", userId);
@@ -86,6 +95,13 @@ export function PlansView() {
   );
   const directionMap = useMemo(
     () => new Map(directions.map((item) => [item.id, item])),
+    [directions],
+  );
+  const availableDirections = useMemo(
+    () =>
+      directions.filter(
+        (direction) => !direction.deleted_at && !direction.archived_at,
+      ),
     [directions],
   );
 
@@ -136,7 +152,13 @@ export function PlansView() {
 
   function parentOptions(type: PlanType) {
     const expected = type === "monthly" ? "annual" : "monthly";
-    return plans.filter((plan) => plan.plan_type === expected);
+    return plans.filter(
+      (plan) =>
+        plan.plan_type === expected &&
+        !plan.deleted_at &&
+        !plan.archived_at &&
+        plan.status !== "archived",
+    );
   }
 
   function startCreate(type: PlanType = "annual") {
@@ -173,14 +195,6 @@ export function PlansView() {
       toast.error("结束日期不能早于开始日期");
       return;
     }
-    if (form.plan_type === "annual" && !form.direction_id) {
-      toast.error("年度计划必须关联方向");
-      return;
-    }
-    if (form.plan_type !== "annual" && !form.parent_id) {
-      toast.error(`${planTypeLabels[form.plan_type]}必须选择上级计划`);
-      return;
-    }
     const normalized = {
       ...form,
       parent_id: form.plan_type === "annual" ? null : form.parent_id,
@@ -203,11 +217,15 @@ export function PlansView() {
   }
 
   return (
-    <div className="fade-in">
+    <div
+      className="fade-in"
+      data-ready={ready ? "true" : "false"}
+      data-testid="plans-view"
+    >
       <PageHeader
         eyebrow="年 → 月 → 周"
         title="计划库"
-        description="计划承担层级关系。每天的六件事只连接本周重点，再沿路径回到月、年和方向。"
+        description="计划可以独立存在，也可以按需要关联方向或上级计划。每天的六件事仍只直接连接本周重点。"
         actions={
           <Button onClick={() => startCreate()}>
             <Plus />
@@ -286,7 +304,9 @@ export function PlansView() {
                     </h2>
                     <div className="mt-2 flex items-center gap-1.5 text-xs text-[var(--river)]">
                       <Route className="size-3.5 shrink-0" />
-                      <span className="truncate">{pathFor(plan).join(" → ")}</span>
+                      <span className="truncate">
+                        {pathFor(plan).join(" → ")}
+                      </span>
                     </div>
                     <p className="mt-3 text-sm leading-6 text-[var(--muted)]">
                       {plan.objective}
@@ -406,7 +426,7 @@ export function PlansView() {
           <DialogHeader>
             <DialogTitle>{editing ? "编辑计划" : "新增计划"}</DialogTitle>
             <DialogDescription>
-              月计划必须属于年度计划，周计划必须属于月计划。
+              上下级关系为可选；选择关联后，系统会继续校验计划层级。
             </DialogDescription>
           </DialogHeader>
           <form className="grid gap-4 sm:grid-cols-2" onSubmit={submit}>
@@ -424,7 +444,7 @@ export function PlansView() {
                   }))
                 }
               >
-                <SelectTrigger>
+                <SelectTrigger data-testid="plan-type-select">
                   <SelectValue />
                 </SelectTrigger>
                 <SelectContent>
@@ -459,6 +479,7 @@ export function PlansView() {
             <div className="sm:col-span-2">
               <Label>标题</Label>
               <Input
+                data-testid="plan-title-input"
                 value={form.title}
                 onChange={(event) =>
                   setForm((value) => ({ ...value, title: event.target.value }))
@@ -467,7 +488,7 @@ export function PlansView() {
             </div>
             {form.plan_type === "annual" ? (
               <div className="sm:col-span-2">
-                <Label>关联方向</Label>
+                <Label>关联方向（可选）</Label>
                 <Select
                   value={form.direction_id ?? "none"}
                   onValueChange={(value) =>
@@ -477,12 +498,12 @@ export function PlansView() {
                     }))
                   }
                 >
-                  <SelectTrigger>
+                  <SelectTrigger data-testid="plan-direction-select">
                     <SelectValue />
                   </SelectTrigger>
                   <SelectContent>
-                    <SelectItem value="none">请选择方向</SelectItem>
-                    {directions.map((direction) => (
+                    <SelectItem value="none">不关联方向</SelectItem>
+                    {availableDirections.map((direction) => (
                       <SelectItem key={direction.id} value={direction.id}>
                         {direction.title}
                       </SelectItem>
@@ -492,7 +513,7 @@ export function PlansView() {
               </div>
             ) : (
               <div className="sm:col-span-2">
-                <Label>上级计划</Label>
+                <Label>上级计划（可选）</Label>
                 <Select
                   value={form.parent_id ?? "none"}
                   onValueChange={(value) =>
@@ -502,11 +523,11 @@ export function PlansView() {
                     }))
                   }
                 >
-                  <SelectTrigger>
+                  <SelectTrigger data-testid="plan-parent-select">
                     <SelectValue />
                   </SelectTrigger>
                   <SelectContent>
-                    <SelectItem value="none">请选择上级计划</SelectItem>
+                    <SelectItem value="none">不关联上级计划</SelectItem>
                     {parentOptions(form.plan_type).map((plan) => (
                       <SelectItem key={plan.id} value={plan.id}>
                         {plan.title}
@@ -519,6 +540,7 @@ export function PlansView() {
             <div className="sm:col-span-2">
               <Label>目标说明</Label>
               <Textarea
+                data-testid="plan-objective-input"
                 value={form.objective}
                 onChange={(event) =>
                   setForm((value) => ({
@@ -557,6 +579,7 @@ export function PlansView() {
             <div className="sm:col-span-2">
               <Label>完成标准</Label>
               <Textarea
+                data-testid="plan-completion-input"
                 value={form.completion_standard}
                 onChange={(event) =>
                   setForm((value) => ({
@@ -593,10 +616,16 @@ export function PlansView() {
               />
             </div>
             <div className="flex justify-end gap-2 sm:col-span-2">
-              <Button type="button" variant="ghost" onClick={() => setOpen(false)}>
+              <Button
+                type="button"
+                variant="ghost"
+                onClick={() => setOpen(false)}
+              >
                 取消
               </Button>
-              <Button type="submit">保存</Button>
+              <Button type="submit" data-testid="plan-save">
+                保存
+              </Button>
             </div>
           </form>
         </DialogContent>

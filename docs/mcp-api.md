@@ -73,7 +73,7 @@ MCP 的 `content` 始终包含同一结构的 JSON 文本，`structuredContent` 
 
 ### `list_directions`
 
-读取当前用户未删除、未归档的方向及 UUID。创建年度计划前先用它取得 `direction_id`。
+读取当前用户未删除、未归档的方向及 UUID。年度计划需要关联方向时，先用它取得 `direction_id`；方向也可以不选。
 
 ```json
 {}
@@ -174,9 +174,10 @@ MCP 的 `content` 始终包含同一结构的 JSON 文本，`structuredContent` 
 
 层级规则：
 
-- 年度计划必须关联当前用户有效的 `direction_id`，`parent_plan_id` 为空。
-- 月计划必须通过 `parent_plan_id` 关联年计划，不能直接关联方向。
-- 周计划必须通过 `parent_plan_id` 关联月计划，不能直接关联方向。
+- 年度计划的 `direction_id` 可为空；如选择方向，必须属于当前用户。年度计划的 `parent_plan_id` 始终为空。
+- 月计划的 `parent_plan_id` 可为空；如选择上级，只能关联当前用户有效的年计划，不能直接关联方向。
+- 周计划的 `parent_plan_id` 可为空；如选择上级，只能关联当前用户有效的月计划，不能直接关联方向。
+- 独立计划的 `upstream_path` 只包含计划本身；以后可以通过 `update_plan` 补充或取消上级关系。
 - 非自然周、自然月或自然年只返回 `warnings`，不阻止创建。
 
 ### `update_plan`
@@ -195,7 +196,7 @@ MCP 的 `content` 始终包含同一结构的 JSON 文本，`structuredContent` 
 }
 ```
 
-允许的 patch 字段：`title`、`objective`、`period_start`、`period_end`、`status`、`importance`、`completion_standard`、`first_action`、`parent_plan_id`、`notes`。`id`、`user_id`、`created_at`、`plan_type`、`direction_id` 不可修改。修改父计划时会重新验证所有权、层级和循环引用。
+允许的 patch 字段：`title`、`objective`、`period_start`、`period_end`、`status`、`importance`、`completion_standard`、`first_action`、`parent_plan_id`、`notes`。`id`、`user_id`、`created_at`、`plan_type`、`direction_id` 不可修改。`parent_plan_id: null` 表示取消上下级关系；选择父计划时会重新验证所有权、层级和循环引用。
 
 ## 本地验证
 
@@ -214,14 +215,14 @@ pnpm test:db
 
 ```bash
 RUN_REAL_MCP_ACCEPTANCE=1 \
-MCP_BASE_URL=https://shouzhong-daily.vercel.app/mcp \
+MCP_URL=https://shouzhong-daily.vercel.app/mcp \
 MCP_ACCESS_TOKEN=用户访问令牌 \
 pnpm test:acceptance:mcp
 ```
 
 ## 部署前检查
 
-- 新迁移已在空数据库和升级数据库执行，49 项 pgTAP 均通过。
+- 新迁移已在升级数据库执行，65 项 pgTAP 均通过；CI 会在空数据库重新执行全部迁移。
 - Supabase 公共业务表继续启用并强制执行 RLS。
 - RPC 只授权 `authenticated`，没有向 `anon` 或 `public` 授权。
 - Vercel 未配置 `NEXT_PUBLIC_E2E_MODE`，也没有客户端可见的服务端密钥。

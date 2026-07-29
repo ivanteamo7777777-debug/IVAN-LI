@@ -526,6 +526,56 @@ describe("守中日课 MCP server", () => {
     });
   });
 
+  it.each([
+    {
+      id: "a3ac92f6-fae4-4d5c-a996-d0805777e851",
+      plan_type: "annual" as const,
+      title: "独立年度计划",
+      period_start: "2026-01-01",
+      period_end: "2026-12-31",
+    },
+    {
+      id: "a3ac92f6-fae4-4d5c-a996-d0805777e852",
+      plan_type: "monthly" as const,
+      title: "独立月计划",
+      period_start: "2026-08-01",
+      period_end: "2026-08-31",
+    },
+    {
+      id: "a3ac92f6-fae4-4d5c-a996-d0805777e853",
+      plan_type: "weekly" as const,
+      title: "独立周计划",
+      period_start: "2026-08-03",
+      period_end: "2026-08-09",
+    },
+  ])(
+    "allows an independent $plan_type plan without relationship IDs",
+    async (input) => {
+      const createPlan = vi.fn(
+        async (value: Parameters<McpRepository["createPlan"]>[0]) => ({
+          ...value,
+          version: 1,
+          upstream_path: [value.title],
+        }),
+      );
+      repository.createPlan = createPlan;
+
+      const result = await client.callTool({
+        name: "create_plan",
+        arguments: input,
+      });
+
+      expect(result.isError).not.toBe(true);
+      expect(createPlan).toHaveBeenCalledWith(
+        expect.objectContaining({
+          ...input,
+          parent_plan_id: null,
+          direction_id: null,
+        }),
+      );
+    },
+  );
+
   it("updates a plan with expected_version and only the allowed patch fields", async () => {
     const input = {
       plan_id: "a3ac92f6-fae4-4d5c-a996-d0805777e85c",
@@ -564,6 +614,37 @@ describe("守中日课 MCP server", () => {
     expect(envelope(result)).toMatchObject({
       status: "ok",
       data: updated,
+    });
+  });
+
+  it("allows a plan to remove its parent with an explicit null patch", async () => {
+    const input = {
+      plan_id: "a3ac92f6-fae4-4d5c-a996-d0805777e85c",
+      expected_version: 3,
+      patch: { parent_plan_id: null },
+    };
+    const updatePlan = vi.fn(async () => ({
+      id: input.plan_id,
+      plan_type: "weekly",
+      parent_plan_id: null,
+      version: 4,
+      upstream_path: ["独立周计划"],
+    }));
+    repository.updatePlan = updatePlan;
+
+    const result = await client.callTool({
+      name: "update_plan",
+      arguments: input,
+    });
+
+    expect(result.isError).not.toBe(true);
+    expect(updatePlan).toHaveBeenCalledWith(input);
+    expect(envelope(result)).toMatchObject({
+      status: "ok",
+      data: {
+        parent_plan_id: null,
+        version: 4,
+      },
     });
   });
 

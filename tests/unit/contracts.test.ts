@@ -16,6 +16,13 @@ const mcpWriteMigration = fs.readFileSync(
   ),
   "utf8",
 );
+const optionalPlanRelationshipsMigration = fs.readFileSync(
+  path.join(
+    root,
+    "supabase/migrations/202607290001_optional_plan_relationships.sql",
+  ),
+  "utf8",
+);
 
 describe("production contracts", () => {
   it("enforces the six-slot uniqueness and range in PostgreSQL", () => {
@@ -220,6 +227,40 @@ describe("production contracts", () => {
     expect(mcpWriteMigration).toContain(
       "warnings := public.mcp_plan_period_warnings(",
     );
+  });
+
+  it("allows independent plans while validating relationships that are selected", () => {
+    expect(optionalPlanRelationshipsMigration).toContain(
+      "drop constraint if exists plans_relationship_shape",
+    );
+    expect(optionalPlanRelationshipsMigration).toContain(
+      "if p_parent_plan_id is null then\n    return null;",
+    );
+    expect(optionalPlanRelationshipsMigration).toContain(
+      "if p_direction_id is null then\n      return null;",
+    );
+    expect(optionalPlanRelationshipsMigration).toContain(
+      "月计划只能关联年计划。",
+    );
+    expect(optionalPlanRelationshipsMigration).toContain(
+      "周计划只能关联月计划。",
+    );
+    expect(optionalPlanRelationshipsMigration).toContain("'CYCLE_DETECTED'");
+    expect(optionalPlanRelationshipsMigration).toContain(
+      "with recursive descendants(id) as",
+    );
+  });
+
+  it("presents plan relationships as optional in the plan editor", () => {
+    const plansView = fs.readFileSync(
+      path.join(root, "src/components/plans-view.tsx"),
+      "utf8",
+    );
+    expect(plansView).toContain("上下级关系为可选");
+    expect(plansView).toContain("上级计划（可选）");
+    expect(plansView).toContain("关联方向（可选）");
+    expect(plansView).not.toContain("必须选择上级计划");
+    expect(plansView).not.toContain("年度计划必须关联方向");
   });
 
   it("keeps MCP transport responses structured and serializable", () => {
