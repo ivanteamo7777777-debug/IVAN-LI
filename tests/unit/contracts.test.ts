@@ -23,6 +23,10 @@ const optionalPlanRelationshipsMigration = fs.readFileSync(
   ),
   "utf8",
 );
+const weeklyAnnualParentMigration = fs.readFileSync(
+  path.join(root, "supabase/migrations/202607300001_weekly_annual_parent.sql"),
+  "utf8",
+);
 
 describe("production contracts", () => {
   it("enforces the six-slot uniqueness and range in PostgreSQL", () => {
@@ -242,12 +246,22 @@ describe("production contracts", () => {
     expect(optionalPlanRelationshipsMigration).toContain(
       "月计划只能关联年计划。",
     );
-    expect(optionalPlanRelationshipsMigration).toContain(
-      "周计划只能关联月计划。",
-    );
     expect(optionalPlanRelationshipsMigration).toContain("'CYCLE_DETECTED'");
     expect(optionalPlanRelationshipsMigration).toContain(
       "with recursive descendants(id) as",
+    );
+  });
+
+  it("allows weekly plans to link directly to annual or monthly plans", () => {
+    expect(weeklyAnnualParentMigration).toContain(
+      "parent_plan.plan_type not in ('annual', 'monthly')",
+    );
+    expect(weeklyAnnualParentMigration).toContain(
+      "周计划只能关联年计划或月计划。",
+    );
+    expect(weeklyAnnualParentMigration).toContain("for share;");
+    expect(weeklyAnnualParentMigration).not.toContain(
+      "parent_plan.plan_type <> 'monthly'",
     );
   });
 
@@ -261,6 +275,8 @@ describe("production contracts", () => {
     expect(plansView).toContain("关联方向（可选）");
     expect(plansView).not.toContain("必须选择上级计划");
     expect(plansView).not.toContain("年度计划必须关联方向");
+    expect(plansView).toContain('new Set<PlanType>(["annual", "monthly"])');
+    expect(plansView).toContain("周计划可直接关联年计划或月计划");
   });
 
   it("keeps MCP transport responses structured and serializable", () => {

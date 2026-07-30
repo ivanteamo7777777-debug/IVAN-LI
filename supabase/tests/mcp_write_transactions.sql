@@ -1,7 +1,7 @@
 begin;
 create extension if not exists pgtap with schema extensions;
 
-select plan(65);
+select plan(69);
 
 select has_column(
   'public',
@@ -440,12 +440,12 @@ select throws_ok(
       '服务端非法周计划',
       '2026-09-07',
       '2026-09-13',
-      '10000000-0000-0000-0000-000000000001',
+      '10000000-0000-0000-0000-000000000003',
       null
     )
   $$,
   '23514',
-  '周计划只能关联月计划。',
+  '周计划只能关联年计划或月计划。',
   'service_role receives the intended hierarchy error instead of a permission error'
 );
 
@@ -514,7 +514,7 @@ select is(
     public.mcp_create_plan(
       '10000000-0000-0000-0000-000000000005',
       'weekly',
-      '非法周计划',
+      '直连年度周计划',
       '2026-07-27',
       '2026-08-02',
       'active',
@@ -525,10 +525,58 @@ select is(
       '10000000-0000-0000-0000-000000000001',
       null,
       ''
-    ) ->> 'code'
+    ) ->> 'status'
   )::text,
-  'HIERARCHY_VIOLATION'::text,
-  'a weekly plan cannot use an annual plan as its parent'
+  'ok'::text,
+  'a weekly plan can link directly to an annual plan'
+);
+
+select ok(
+  (
+    select
+      parent_id = '10000000-0000-0000-0000-000000000001'
+      and version = 1
+    from public.plans
+    where id = '10000000-0000-0000-0000-000000000005'
+  ),
+  'the direct annual parent persists without creating a monthly plan'
+);
+
+select is(
+  jsonb_array_length(
+    public.mcp_plan_upstream_path(
+      '10000000-0000-0000-0000-000000000005',
+      auth.uid()
+    )
+  ),
+  3,
+  'a directly linked weekly plan path contains direction, annual and weekly'
+);
+
+select is(
+  (
+    public.mcp_update_plan(
+      '10000000-0000-0000-0000-000000000013',
+      3,
+      jsonb_build_object(
+        'parent_plan_id',
+        '10000000-0000-0000-0000-000000000001'
+      )
+    ) ->> 'status'
+  )::text,
+  'ok'::text,
+  'an existing weekly plan can be reparented directly to an annual plan'
+);
+
+select ok(
+  (
+    select
+      parent_id = '10000000-0000-0000-0000-000000000001'
+      and version = 4
+    from public.plans
+    where id = '10000000-0000-0000-0000-000000000013'
+  ),
+  'reparenting to an annual plan persists and increments the version'
 );
 
 select is(

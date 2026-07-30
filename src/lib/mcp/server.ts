@@ -381,7 +381,7 @@ export function createShouzhongMcpServer(
   const server = new McpServer(
     {
       name: "shouzhong-daily",
-      version: "1.2.0",
+      version: "1.3.0",
     },
     {
       instructions:
@@ -481,7 +481,7 @@ export function createShouzhongMcpServer(
     {
       title: "新增计划",
       description:
-        "新增年度、月度或周计划。需要用户在当前对话中明确确认。客户端提供 UUID 作为幂等键，相同 ID 不得重复创建。方向和上级计划均可不选，计划可以独立创建；如果选择关联，月计划只能关联年计划，周计划只能关联月计划。非自然周、月、年只返回 warning，不会强制阻止。",
+        "新增年度、月度或周计划。需要用户在当前对话中明确确认。客户端提供 UUID 作为幂等键，相同 ID 不得重复创建。方向和上级计划均可不选，计划可以独立创建；如果选择关联，月计划只能关联年计划，周计划可以直接关联年计划或月计划。非自然周、月、年只返回 warning，不会强制阻止。",
       inputSchema: {
         id: z.string().describe("客户端生成的幂等 UUID"),
         plan_type: z.string().describe("annual | monthly | weekly"),
@@ -500,7 +500,7 @@ export function createShouzhongMcpServer(
           .string()
           .nullable()
           .optional()
-          .describe("可选。月计划的年计划父级，或周计划的月计划父级"),
+          .describe("可选。月计划可关联年计划；周计划可直接关联年计划或月计划"),
         direction_id: z
           .string()
           .nullable()

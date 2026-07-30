@@ -151,10 +151,13 @@ export function PlansView() {
     .sort((a, b) => a.period_start.localeCompare(b.period_start));
 
   function parentOptions(type: PlanType) {
-    const expected = type === "monthly" ? "annual" : "monthly";
+    const expected =
+      type === "monthly"
+        ? new Set<PlanType>(["annual"])
+        : new Set<PlanType>(["annual", "monthly"]);
     return plans.filter(
       (plan) =>
-        plan.plan_type === expected &&
+        expected.has(plan.plan_type) &&
         !plan.deleted_at &&
         !plan.archived_at &&
         plan.status !== "archived",
@@ -223,9 +226,9 @@ export function PlansView() {
       data-testid="plans-view"
     >
       <PageHeader
-        eyebrow="年 → 月 → 周"
+        eyebrow="年 · 月 · 周"
         title="计划库"
-        description="计划可以独立存在，也可以按需要关联方向或上级计划。每天的六件事仍只直接连接本周重点。"
+        description="计划可以独立存在；月计划可关联年计划，周计划可直接关联年计划或月计划。每天的六件事仍只直接连接本周重点。"
         actions={
           <Button onClick={() => startCreate()}>
             <Plus />
@@ -426,7 +429,7 @@ export function PlansView() {
           <DialogHeader>
             <DialogTitle>{editing ? "编辑计划" : "新增计划"}</DialogTitle>
             <DialogDescription>
-              上下级关系为可选；选择关联后，系统会继续校验计划层级。
+              上下级关系为可选；周计划可以直接关联年计划或月计划。
             </DialogDescription>
           </DialogHeader>
           <form className="grid gap-4 sm:grid-cols-2" onSubmit={submit}>
@@ -530,7 +533,7 @@ export function PlansView() {
                     <SelectItem value="none">不关联上级计划</SelectItem>
                     {parentOptions(form.plan_type).map((plan) => (
                       <SelectItem key={plan.id} value={plan.id}>
-                        {plan.title}
+                        {planTypeLabels[plan.plan_type]} · {plan.title}
                       </SelectItem>
                     ))}
                   </SelectContent>

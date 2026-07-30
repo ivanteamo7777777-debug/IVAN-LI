@@ -107,7 +107,7 @@ test("multiple exercise sessions persist independently on the same day", async (
   await expect(persisted.nth(1)).toHaveValue("晚间拉伸");
 });
 
-test("annual, monthly and weekly plans can be saved without relationships", async ({
+test("plans can be independent and a weekly plan can link directly to an annual plan", async ({
   page,
   browserName,
 }) => {
@@ -147,14 +147,37 @@ test("annual, monthly and weekly plans can be saved without relationships", asyn
 
   await createIndependentPlan("年度计划", "独立年度计划");
   await createIndependentPlan("月度计划", "独立月计划");
-  await createIndependentPlan("每周计划", "独立周计划");
+
+  await page.getByRole("button", { name: "新增计划" }).click();
+  await page.getByTestId("plan-type-select").click();
+  await page.getByRole("option", { name: "每周计划" }).click();
+  await page.getByTestId("plan-parent-select").click();
+  await expect(
+    page.getByRole("option", { name: "年度计划 · 独立年度计划" }),
+  ).toBeVisible();
+  await expect(
+    page.getByRole("option", { name: "月度计划 · 独立月计划" }),
+  ).toBeVisible();
+  await page.getByRole("option", { name: "年度计划 · 独立年度计划" }).click();
+  await page.getByTestId("plan-title-input").fill("直连年度周计划");
+  await page.getByTestId("plan-objective-input").fill("跳过月计划直接执行");
+  await page.getByTestId("plan-completion-input").fill("完成并复盘");
+  await page.getByTestId("plan-save").click();
+  await expect(
+    page.getByRole("heading", { name: "直连年度周计划" }),
+  ).toBeVisible();
+  await expect(
+    page.getByText("独立年度计划 → 直连年度周计划", { exact: true }),
+  ).toBeVisible();
 
   await page.reload();
   await expect(
     page.getByRole("heading", { name: "独立年度计划" }),
   ).toBeVisible();
   await expect(page.getByRole("heading", { name: "独立月计划" })).toBeVisible();
-  await expect(page.getByRole("heading", { name: "独立周计划" })).toBeVisible();
+  await expect(
+    page.getByRole("heading", { name: "直连年度周计划" }),
+  ).toBeVisible();
 });
 
 test("AI suggestions remain a draft until explicit confirmation", async ({

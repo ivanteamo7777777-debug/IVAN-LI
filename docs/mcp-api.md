@@ -176,7 +176,7 @@ MCP 的 `content` 始终包含同一结构的 JSON 文本，`structuredContent` 
 
 - 年度计划的 `direction_id` 可为空；如选择方向，必须属于当前用户。年度计划的 `parent_plan_id` 始终为空。
 - 月计划的 `parent_plan_id` 可为空；如选择上级，只能关联当前用户有效的年计划，不能直接关联方向。
-- 周计划的 `parent_plan_id` 可为空；如选择上级，只能关联当前用户有效的月计划，不能直接关联方向。
+- 周计划的 `parent_plan_id` 可为空；如选择上级，可直接关联当前用户有效的年计划或月计划，不能直接关联方向。
 - 独立计划的 `upstream_path` 只包含计划本身；以后可以通过 `update_plan` 补充或取消上级关系。
 - 非自然周、自然月或自然年只返回 `warnings`，不阻止创建。
 
@@ -222,7 +222,7 @@ pnpm test:acceptance:mcp
 
 ## 部署前检查
 
-- 新迁移已在升级数据库执行，65 项 pgTAP 均通过；CI 会在空数据库重新执行全部迁移。
+- 新迁移已在升级数据库执行，69 项 pgTAP 均通过；CI 会在空数据库重新执行全部迁移。
 - Supabase 公共业务表继续启用并强制执行 RLS。
 - RPC 只授权 `authenticated`，没有向 `anon` 或 `public` 授权。
 - Vercel 未配置 `NEXT_PUBLIC_E2E_MODE`，也没有客户端可见的服务端密钥。
