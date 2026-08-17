@@ -12,8 +12,10 @@ interface InstallPromptEvent extends Event {
 
 export function PwaManager() {
   const updateAccepted = useRef(false);
-  const [installPrompt, setInstallPrompt] =
-    useState<InstallPromptEvent | null>(null);
+  const updateToast = useRef<string | number | null>(null);
+  const [installPrompt, setInstallPrompt] = useState<InstallPromptEvent | null>(
+    null,
+  );
   const [showIos, setShowIos] = useState(false);
 
   useEffect(() => {
@@ -30,13 +32,23 @@ export function PwaManager() {
 
     const serwist = window.serwist;
     const onWaiting = () => {
-      toast("守中日课有新版本", {
+      if (updateToast.current !== null) return;
+      updateToast.current = toast("守中日课有新版本", {
         description: "更新不会影响已保存在本机的记录。",
         action: {
           label: "立即更新",
           onClick: () => {
             updateAccepted.current = true;
-            serwist.messageSkipWaiting();
+            if (serwist) {
+              serwist.messageSkipWaiting();
+              return;
+            }
+            void navigator.serviceWorker
+              ?.getRegistration()
+              .then((registration) =>
+                registration?.waiting?.postMessage({ type: "SKIP_WAITING" }),
+              )
+              .catch(() => undefined);
           },
         },
         duration: Infinity,
@@ -47,11 +59,47 @@ export function PwaManager() {
     };
     serwist?.addEventListener("waiting", onWaiting);
     serwist?.addEventListener("controlling", onControlling);
+    if (!serwist) {
+      navigator.serviceWorker?.addEventListener(
+        "controllerchange",
+        onControlling,
+      );
+    }
+
+    let idleHandle: number | null = null;
+    let fallbackHandle: ReturnType<typeof setTimeout> | null = null;
+    const checkWorker = async () => {
+      const registration = await navigator.serviceWorker?.getRegistration();
+      if (registration?.waiting) onWaiting();
+      if (registration && navigator.onLine) {
+        await registration.update();
+        if (registration.waiting) onWaiting();
+      }
+    };
+    if ("requestIdleCallback" in window) {
+      idleHandle = window.requestIdleCallback(
+        () => void checkWorker().catch(() => undefined),
+        { timeout: 4_000 },
+      );
+    } else {
+      fallbackHandle = setTimeout(
+        () => void checkWorker().catch(() => undefined),
+        1_500,
+      );
+    }
 
     return () => {
       window.removeEventListener("beforeinstallprompt", onInstall);
       serwist?.removeEventListener("waiting", onWaiting);
       serwist?.removeEventListener("controlling", onControlling);
+      if (!serwist) {
+        navigator.serviceWorker?.removeEventListener(
+          "controllerchange",
+          onControlling,
+        );
+      }
+      if (idleHandle !== null) window.cancelIdleCallback(idleHandle);
+      if (fallbackHandle !== null) clearTimeout(fallbackHandle);
     };
   }, []);
 

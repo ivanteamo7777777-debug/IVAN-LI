@@ -4,7 +4,11 @@ import {
   AUTH_COOKIE_MAX_AGE_SECONDS,
   getAuthCookieOptions,
 } from "@/lib/supabase/auth-cookie";
-import { shouldCacheAuthenticatedNavigation } from "@/lib/pwa-cache";
+import {
+  AUTHENTICATED_NETWORK_TIMEOUT_SECONDS,
+  isAuthenticatedAppPath,
+  shouldCacheAuthenticatedNavigation,
+} from "@/lib/pwa-cache";
 
 describe("persistent PWA authentication", () => {
   it("uses a long-lived secure production cookie across the whole app", () => {
@@ -37,8 +41,37 @@ describe("persistent PWA authentication", () => {
       shouldCacheAuthenticatedNavigation({
         status: 200,
         redirected: false,
+        url: "https://shouzhong-daily.vercel.app/plans?_rsc=abc",
+        headers: {
+          get: (name) => (name === "x-nextjs-redirect" ? "/auth/login" : null),
+        },
+      }),
+    ).toBe(false);
+    for (const cacheControl of [
+      "private, no-cache, no-store, must-revalidate",
+      "public, max-age=0, no-store",
+    ]) {
+      expect(
+        shouldCacheAuthenticatedNavigation({
+          status: 200,
+          redirected: false,
+          url: "https://shouzhong-daily.vercel.app/today",
+          headers: {
+            get: (name) =>
+              name.toLowerCase() === "cache-control" ? cacheControl : null,
+          },
+        }),
+      ).toBe(false);
+    }
+    expect(
+      shouldCacheAuthenticatedNavigation({
+        status: 200,
+        redirected: false,
         url: "https://shouzhong-daily.vercel.app/today",
       }),
     ).toBe(true);
+    expect(AUTHENTICATED_NETWORK_TIMEOUT_SECONDS).toBeLessThanOrEqual(2);
+    expect(isAuthenticatedAppPath("/today")).toBe(true);
+    expect(isAuthenticatedAppPath("/auth/login")).toBe(false);
   });
 });

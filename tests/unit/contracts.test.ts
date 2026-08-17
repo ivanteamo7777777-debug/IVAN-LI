@@ -93,7 +93,62 @@ describe("production contracts", () => {
     expect(sw).toContain('self.addEventListener("push"');
     expect(sw).toContain('self.addEventListener("notificationclick"');
     expect(sw).toContain("shouldCacheAuthenticatedNavigation");
-    expect(sw).toContain("shouzhong-authenticated-shell-v2");
+    expect(sw).toContain("NEXT_PUBLIC_RUNTIME_CACHE_VERSION");
+    expect(sw).toContain(
+      "shouzhong-authenticated-shell-${RUNTIME_CACHE_VERSION}",
+    );
+    expect(sw).toContain(
+      "shouzhong-authenticated-rsc-${RUNTIME_CACHE_VERSION}",
+    );
+    expect(sw).toContain("CURRENT_AUTHENTICATED_CACHES");
+    expect(sw).toContain("LEGACY_NEXT_PAGE_CACHES.has(name)");
+    expect(sw).toContain("AUTHENTICATED_NETWORK_TIMEOUT_SECONDS");
+  });
+
+  it("authenticates protected navigation once without serializing identity into RSC", () => {
+    const proxy = fs.readFileSync(path.join(root, "src/proxy.ts"), "utf8");
+    const layout = fs.readFileSync(
+      path.join(root, "src/app/(app)/layout.tsx"),
+      "utf8",
+    );
+    const boundary = fs.readFileSync(
+      path.join(root, "src/components/client-app-boundary.tsx"),
+      "utf8",
+    );
+    expect(proxy.match(/\.auth\.getClaims\(\)/g)).toHaveLength(1);
+    expect(proxy.indexOf('request.headers.get("RSC") === "1"')).toBeLessThan(
+      proxy.indexOf("createServerClient(url, key"),
+    );
+    expect(proxy).toContain("NextResponse.redirect(loginUrl)");
+    expect(proxy).not.toContain("headersWithVerifiedUser");
+    expect(layout).toContain("<ClientAppBoundary localOnly={localOnly}>");
+    expect(layout).not.toContain("userId=");
+    expect(layout).not.toContain("getClaims");
+    expect(boundary).toContain("supabase.auth.getSession()");
+    expect(boundary).toContain("rememberLocalIdentity(identityToRemember)");
+    expect(boundary).toContain("getRememberedLocalIdentity()");
+    expect(boundary).toContain("LOCAL_E2E_IDENTITY");
+    expect(boundary).toContain("if (!navigator.onLine)");
+    expect(boundary).toContain("auth.onAuthStateChange");
+    expect(boundary).toContain('event === "SIGNED_OUT"');
+    expect(boundary).toContain("key={identity.userId}");
+  });
+
+  it("prefetches navigation only on intent and safely updates the worker", () => {
+    const shell = fs.readFileSync(
+      path.join(root, "src/components/app-shell.tsx"),
+      "utf8",
+    );
+    const manager = fs.readFileSync(
+      path.join(root, "src/components/pwa-manager.tsx"),
+      "utf8",
+    );
+    expect(shell).toContain("Date.now() - warmedAt < 20_000");
+    expect(shell).toContain("onPointerEnter={() => warmRoute(item.href)}");
+    expect(shell).toContain("onTouchStart={() => warmRoute(item.href)}");
+    expect(shell).not.toContain("requestIdleCallback");
+    expect(manager).toContain('postMessage({ type: "SKIP_WAITING" })');
+    expect(manager).toContain('"controllerchange"');
   });
 
   it("persists password sessions through a server-set cookie response", () => {

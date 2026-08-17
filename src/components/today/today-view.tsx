@@ -1,6 +1,7 @@
 "use client";
 
-import { useEffect, useMemo, useRef, useState } from "react";
+import { useMemo, useState } from "react";
+import { useSearchParams } from "next/navigation";
 import {
   closestCenter,
   DndContext,
@@ -20,7 +21,7 @@ import { zhCN } from "date-fns/locale";
 import { CalendarDays, Copy, Sparkles } from "lucide-react";
 import { toast } from "sonner";
 import { useRecords } from "@/hooks/use-records";
-import { deleteLocal, localDb, patchLocal, saveLocal } from "@/lib/local-db";
+import { deleteLocal, patchLocal, saveLocal } from "@/lib/local-db";
 import { localDateKey, isoNow, newId, stableUuid } from "@/lib/utils";
 import type {
   DailyTask,
@@ -129,11 +130,13 @@ interface AiSuggestion {
   weekly_plan_id: string | null;
 }
 
-export function TodayView({ initialDate }: { initialDate?: string }) {
-  const { userId, hydrated } = useSync();
+export function TodayView() {
+  const { userId } = useSync();
+  const searchParams = useSearchParams();
+  const requestedDate = searchParams.get("date");
   const [date, setDate] = useState(
-    /^\d{4}-\d{2}-\d{2}$/.test(initialDate ?? "")
-      ? initialDate!
+    /^\d{4}-\d{2}-\d{2}$/.test(requestedDate ?? "")
+      ? requestedDate!
       : localDateKey(),
   );
   const tasks = useRecords<DailyTask>("daily_tasks", userId);
@@ -141,45 +144,35 @@ export function TodayView({ initialDate }: { initialDate?: string }) {
   const directions = useRecords<Direction>("directions", userId);
   const exercises = useRecords<ExerciseLog>("exercise_logs", userId);
   const allMeals = useRecords<MealLog>("meal_logs", userId);
-  const ensuredDates = useRef(new Set<string>());
   const [candidateOpen, setCandidateOpen] = useState(false);
   const [aiOpen, setAiOpen] = useState(false);
   const [aiLoading, setAiLoading] = useState(false);
   const [aiDraft, setAiDraft] = useState<AiSuggestion[]>([]);
 
   const todayTasks = useMemo(() => {
-    const slots = new Map<number, DailyTask>();
+    // Structural slots are an in-memory shell until the user edits them. This
+    // keeps Today usable immediately from IndexedDB without writing six empty
+    // records before a new device has finished its background cloud refresh.
+    const slots = new Map<number, DailyTask>(
+      Array.from({ length: 6 }, (_, index) => {
+        const slot = index + 1;
+        return [slot, emptyTask(userId, date, slot)];
+      }),
+    );
+    const realSlots = new Set<number>();
     for (const task of tasks.filter((item) => item.entry_date === date)) {
       const current = slots.get(task.slot_index);
-      if (!current || task.updated_at > current.updated_at) {
+      if (
+        !realSlots.has(task.slot_index) ||
+        !current ||
+        task.updated_at > current.updated_at
+      ) {
         slots.set(task.slot_index, task);
       }
+      realSlots.add(task.slot_index);
     }
     return [...slots.values()].sort((a, b) => a.slot_index - b.slot_index);
-  }, [date, tasks]);
-
-  useEffect(() => {
-    if (!hydrated) return;
-    if (ensuredDates.current.has(date)) return;
-    ensuredDates.current.add(date);
-    void (async () => {
-      const localRows = await localDb.records
-        .where("[table+user_id]")
-        .equals(["daily_tasks", userId])
-        .toArray();
-      const existingSlots = new Set(
-        localRows
-          .map((row) => row.data as DailyTask)
-          .filter((task) => !task.deleted_at && task.entry_date === date)
-          .map((task) => task.slot_index),
-      );
-      for (let slot = 1; slot <= 6; slot += 1) {
-        if (!existingSlots.has(slot)) {
-          await saveLocal("daily_tasks", emptyTask(userId, date, slot));
-        }
-      }
-    })();
-  }, [date, hydrated, tasks, userId]);
+  }, [date, tasks, userId]);
 
   const weeklyPlans = useMemo(
     () =>

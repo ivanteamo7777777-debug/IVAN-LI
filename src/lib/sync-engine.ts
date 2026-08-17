@@ -3,8 +3,10 @@
 import type { RealtimeChannel, SupabaseClient } from "@supabase/supabase-js";
 import { createClient } from "@/lib/supabase/client";
 import {
+  deleteRemoteIfClean,
   localDb,
   storeRemote,
+  storeRemotePage,
   type LocalRecord,
   type SyncOperation,
 } from "@/lib/local-db";
@@ -24,6 +26,9 @@ const naturalKeys: Partial<Record<SyncTable, string>> = {
   reminder_settings: "user_id",
   push_subscriptions: "user_id,endpoint",
 };
+
+export const HYDRATE_PAGE_SIZE = 500;
+const HYDRATE_REQUEST_TIMEOUT_MS = 12_000;
 
 function table(client: SupabaseClient, name: SyncTable) {
   // Database types are generated after a project is linked. Runtime remains RLS-scoped.
@@ -198,15 +203,26 @@ async function flushFile(client: SupabaseClient, fileId: string) {
   const file = await localDb.files.get(fileId);
   if (!file || file.status === "synced") return;
   await localDb.files.update(file.id, { status: "syncing" });
-  const { error } = await client.storage
-    .from(file.bucket)
-    .upload(file.path, file.blob, {
-      contentType: file.content_type,
-      upsert: true,
-    });
-  await localDb.files.update(file.id, {
-    status: error ? "failed" : "synced",
-  });
+  try {
+    const { error } = await client.storage
+      .from(file.bucket)
+      .upload(file.path, file.blob, {
+        contentType: file.content_type,
+        upsert: true,
+      });
+    if (error) throw error;
+    await localDb.files.update(file.id, { status: "synced" });
+  } catch {
+    // The blob remains in IndexedDB and can be retried on the next flush.
+    await localDb.files.update(file.id, { status: "failed" });
+  }
+}
+
+async function recoverInterruptedFiles(userId: string) {
+  await localDb.files
+    .where("[user_id+status]")
+    .equals([userId, "syncing"])
+    .modify({ status: "pending" });
 }
 
 export async function queueFileUpload(input: {
@@ -230,33 +246,151 @@ export async function queueFileUpload(input: {
   return id;
 }
 
+type HydratedTableCallback = (tableName: SyncTable) => void;
+
+function aggregateHydrationFailures(results: PromiseSettledResult<void>[]) {
+  const failures = results
+    .map((result, index) => ({ result, table: syncTables[index] }))
+    .filter(
+      (
+        item,
+      ): item is {
+        result: PromiseRejectedResult;
+        table: SyncTable;
+      } => item.result.status === "rejected",
+    );
+  if (!failures.length) return null;
+  return new AggregateError(
+    failures.map(({ result }) => result.reason),
+    `${failures.map(({ table }) => table).join("、")} 云端读取失败`,
+  );
+}
+
+async function settleWithoutThrow(task: Promise<unknown>) {
+  try {
+    await task;
+  } catch {
+    // A later full hydrate reconciles a transient Realtime/IndexedDB failure.
+  }
+}
+
 export class SyncEngine {
   private client: SupabaseClient;
   private userId: string;
   private channel?: RealtimeChannel;
   private flushing = false;
   private flushRequested = false;
+  private hydratePromise: Promise<void> | null = null;
+  private refreshPromise: Promise<void> | null = null;
+  private hydrateControllers = new Set<AbortController>();
+  private interruptedFilesRecovered = false;
+  private destroyed = false;
 
   constructor(userId: string, client?: SupabaseClient) {
     this.userId = userId;
     this.client = client ?? createClient();
   }
 
-  async hydrate() {
-    if (!navigator.onLine) return;
-    for (const tableName of syncTables) {
-      const { data, error } = await table(this.client, tableName)
+  private async hydrateTable(tableName: SyncTable) {
+    let cursor: { updated_at: string; record_id: string } | null = null;
+
+    while (navigator.onLine && !this.destroyed) {
+      let query = table(this.client, tableName)
         .select("*")
         .eq("user_id", this.userId)
-        .order("updated_at", { ascending: true });
-      if (error) throw error;
-      for (const row of data ?? []) {
-        await storeRemote(tableName, row as unknown as DomainRecord);
+        .order("updated_at", { ascending: true })
+        .order("id", { ascending: true })
+        .limit(HYDRATE_PAGE_SIZE);
+
+      if (cursor) {
+        query = query.or(
+          `updated_at.gt.${cursor.updated_at},and(updated_at.eq.${cursor.updated_at},id.gt.${cursor.record_id})`,
+        );
       }
+
+      const controller = new AbortController();
+      this.hydrateControllers.add(controller);
+      const timeout = setTimeout(
+        () => controller.abort(),
+        HYDRATE_REQUEST_TIMEOUT_MS,
+      );
+      const { data, error } = await Promise.resolve(
+        query.abortSignal(controller.signal),
+      ).finally(() => {
+        clearTimeout(timeout);
+        this.hydrateControllers.delete(controller);
+      });
+      if (error) throw error;
+      if (this.destroyed) return;
+
+      const rows = (data ?? []) as unknown as DomainRecord[];
+      if (!rows.length) break;
+
+      const last = rows[rows.length - 1];
+      const nextCursor = {
+        updated_at: last.updated_at,
+        record_id: last.id,
+      };
+      if (
+        cursor &&
+        (nextCursor.updated_at < cursor.updated_at ||
+          (nextCursor.updated_at === cursor.updated_at &&
+            nextCursor.record_id <= cursor.record_id))
+      ) {
+        throw new Error(`${tableName} 云端同步游标没有前进`);
+      }
+
+      await storeRemotePage(tableName, this.userId, rows);
+      cursor = nextCursor;
+      if (rows.length < HYDRATE_PAGE_SIZE) break;
+    }
+  }
+
+  async hydrate(onTableHydrated?: HydratedTableCallback) {
+    if (!navigator.onLine || this.destroyed) return;
+    if (this.hydratePromise) return this.hydratePromise;
+    const hydration = (async () => {
+      const results = await Promise.allSettled(
+        syncTables.map(async (tableName) => {
+          await this.hydrateTable(tableName);
+          if (!this.destroyed) onTableHydrated?.(tableName);
+        }),
+      );
+      if (this.destroyed) return;
+      const failure = aggregateHydrationFailures(results);
+      if (failure) throw failure;
+    })();
+    this.hydratePromise = hydration;
+    try {
+      await hydration;
+    } finally {
+      if (this.hydratePromise === hydration) this.hydratePromise = null;
+    }
+  }
+
+  async refresh(onTableHydrated?: HydratedTableCallback) {
+    if (!navigator.onLine || this.destroyed) return;
+    if (this.refreshPromise) return this.refreshPromise;
+    const refresh = (async () => {
+      let hydrationError: unknown;
+      try {
+        await this.hydrate(onTableHydrated);
+      } catch (error) {
+        hydrationError = error;
+      }
+      if (!this.destroyed) await this.flush();
+      if (hydrationError) throw hydrationError;
+    })();
+    this.refreshPromise = refresh;
+    try {
+      await refresh;
+    } finally {
+      if (this.refreshPromise === refresh) this.refreshPromise = null;
     }
   }
 
   subscribe() {
+    if (this.destroyed) return;
     this.channel = this.client.channel(`shouzhong:${this.userId}`);
     for (const tableName of syncTables) {
       this.channel.on(
@@ -267,12 +401,14 @@ export class SyncEngine {
           table: tableName,
           filter: `user_id=eq.${this.userId}`,
         },
-        async (payload) => {
+        (payload) => {
           const data = (payload.new || payload.old) as unknown as DomainRecord;
           if (payload.eventType === "DELETE") {
-            await localDb.records.delete(`${tableName}:${data.id}`);
+            void settleWithoutThrow(
+              deleteRemoteIfClean(tableName, this.userId, data.id),
+            );
           } else {
-            await storeRemote(tableName, data);
+            void settleWithoutThrow(storeRemote(tableName, data));
           }
         },
       );
@@ -281,7 +417,7 @@ export class SyncEngine {
   }
 
   async flush() {
-    if (!navigator.onLine) return;
+    if (!navigator.onLine || this.destroyed) return;
     if (this.flushing) {
       this.flushRequested = true;
       return;
@@ -291,13 +427,17 @@ export class SyncEngine {
       do {
         this.flushRequested = false;
         await this.flushBatch();
-      } while (this.flushRequested && navigator.onLine);
+      } while (this.flushRequested && navigator.onLine && !this.destroyed);
     } finally {
       this.flushing = false;
     }
   }
 
   private async flushBatch() {
+    if (!this.interruptedFilesRecovered) {
+      await recoverInterruptedFiles(this.userId);
+      this.interruptedFilesRecovered = true;
+    }
     const files = await localDb.files
       .where("[user_id+status]")
       .anyOf([
@@ -305,13 +445,18 @@ export class SyncEngine {
         [this.userId, "failed"],
       ])
       .toArray();
-    for (const file of files) await flushFile(this.client, file.id);
+    for (const file of files) {
+      if (this.destroyed) return;
+      await settleWithoutThrow(flushFile(this.client, file.id));
+    }
 
+    if (this.destroyed) return;
     const operations = await localDb.operations
       .where("[user_id+created_at]")
       .between([this.userId, Dexie.minKey], [this.userId, Dexie.maxKey])
       .sortBy("created_at");
     for (const operation of operations) {
+      if (this.destroyed) return;
       await this.flushOperation(operation);
     }
   }
@@ -376,7 +521,14 @@ export class SyncEngine {
   }
 
   destroy() {
-    if (this.channel) void this.client.removeChannel(this.channel);
+    this.destroyed = true;
+    this.flushRequested = false;
+    for (const controller of this.hydrateControllers) controller.abort();
+    this.hydrateControllers.clear();
+    if (this.channel) {
+      void settleWithoutThrow(this.client.removeChannel(this.channel));
+      this.channel = undefined;
+    }
   }
 }
 

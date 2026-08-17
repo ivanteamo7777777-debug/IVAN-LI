@@ -1,18 +1,28 @@
 import type { NextConfig } from "next";
 import withSerwistInit from "@serwist/next";
 
+const runtimeCacheVersion = (
+  process.env.VERCEL_GIT_COMMIT_SHA ??
+  process.env.GITHUB_SHA ??
+  "local"
+).slice(0, 12);
+
 const withSerwist = withSerwistInit({
   swSrc: "src/app/sw.ts",
   swDest: "public/sw.js",
   additionalPrecacheEntries: [
     { url: "/offline", revision: "shouzhong-offline-v1" },
   ],
+  reloadOnOnline: false,
   disable: process.env.NODE_ENV === "development",
 });
 
 const nextConfig: NextConfig = {
   poweredByHeader: false,
   reactStrictMode: true,
+  env: {
+    NEXT_PUBLIC_RUNTIME_CACHE_VERSION: runtimeCacheVersion,
+  },
   experimental: {
     typedEnv: true,
   },
