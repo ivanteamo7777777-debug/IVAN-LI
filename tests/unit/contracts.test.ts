@@ -102,7 +102,7 @@ describe("production contracts", () => {
     );
     expect(sw).toContain("CURRENT_AUTHENTICATED_CACHES");
     expect(sw).toContain("LEGACY_NEXT_PAGE_CACHES.has(name)");
-    expect(sw).toContain("AUTHENTICATED_NETWORK_TIMEOUT_SECONDS");
+    expect(sw).toContain("StaleWhileRevalidate");
   });
 
   it("authenticates protected navigation once without serializing identity into RSC", () => {
@@ -119,6 +119,7 @@ describe("production contracts", () => {
     expect(proxy.indexOf('request.headers.get("RSC") === "1"')).toBeLessThan(
       proxy.indexOf("createServerClient(url, key"),
     );
+    expect(proxy).toContain('request.nextUrl.searchParams.has("_rsc")');
     expect(proxy).toContain("NextResponse.redirect(loginUrl)");
     expect(proxy).not.toContain("headersWithVerifiedUser");
     expect(layout).toContain("<ClientAppBoundary localOnly={localOnly}>");

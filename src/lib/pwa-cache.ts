@@ -7,8 +7,6 @@ interface NavigationResponse {
   };
 }
 
-export const AUTHENTICATED_NETWORK_TIMEOUT_SECONDS = 2;
-
 const authenticatedPaths = new Set([
   "/today",
   "/directions",

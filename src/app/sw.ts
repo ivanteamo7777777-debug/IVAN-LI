@@ -1,8 +1,7 @@
 import { defaultCache } from "@serwist/next/worker";
 import type { PrecacheEntry, SerwistGlobalConfig } from "serwist";
-import { ExpirationPlugin, NetworkFirst, Serwist } from "serwist";
+import { ExpirationPlugin, Serwist, StaleWhileRevalidate } from "serwist";
 import {
-  AUTHENTICATED_NETWORK_TIMEOUT_SECONDS,
   isAuthenticatedAppPath,
   shouldCacheAuthenticatedNavigation,
 } from "@/lib/pwa-cache";
@@ -111,9 +110,8 @@ const serwist = new Serwist({
           isAuthenticatedAppPath(url.pathname)
         );
       },
-      handler: new NetworkFirst({
+      handler: new StaleWhileRevalidate({
         cacheName: AUTHENTICATED_RSC_PREFETCH_CACHE,
-        networkTimeoutSeconds: AUTHENTICATED_NETWORK_TIMEOUT_SECONDS,
         plugins: [
           {
             cacheWillUpdate: async ({ response }) =>
@@ -133,9 +131,8 @@ const serwist = new Serwist({
           isAuthenticatedAppPath(url.pathname)
         );
       },
-      handler: new NetworkFirst({
+      handler: new StaleWhileRevalidate({
         cacheName: AUTHENTICATED_RSC_CACHE,
-        networkTimeoutSeconds: AUTHENTICATED_NETWORK_TIMEOUT_SECONDS,
         plugins: [
           {
             cacheWillUpdate: async ({ response }) =>
@@ -154,9 +151,8 @@ const serwist = new Serwist({
           request.mode === "navigate" && isAuthenticatedAppPath(url.pathname)
         );
       },
-      handler: new NetworkFirst({
+      handler: new StaleWhileRevalidate({
         cacheName: AUTHENTICATED_SHELL_CACHE,
-        networkTimeoutSeconds: AUTHENTICATED_NETWORK_TIMEOUT_SECONDS,
         plugins: [
           {
             cacheWillUpdate: async ({ response }) =>

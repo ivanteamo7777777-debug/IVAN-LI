@@ -5,7 +5,6 @@ import {
   getAuthCookieOptions,
 } from "@/lib/supabase/auth-cookie";
 import {
-  AUTHENTICATED_NETWORK_TIMEOUT_SECONDS,
   isAuthenticatedAppPath,
   shouldCacheAuthenticatedNavigation,
 } from "@/lib/pwa-cache";
@@ -70,7 +69,6 @@ describe("persistent PWA authentication", () => {
         url: "https://shouzhong-daily.vercel.app/today",
       }),
     ).toBe(true);
-    expect(AUTHENTICATED_NETWORK_TIMEOUT_SECONDS).toBeLessThanOrEqual(2);
     expect(isAuthenticatedAppPath("/today")).toBe(true);
     expect(isAuthenticatedAppPath("/auth/login")).toBe(false);
   });

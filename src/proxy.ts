@@ -9,7 +9,10 @@ export async function proxy(request: NextRequest) {
     return NextResponse.next({ request });
   }
 
-  if (request.headers.get("RSC") === "1") {
+  if (
+    request.headers.get("RSC") === "1" ||
+    request.nextUrl.searchParams.has("_rsc")
+  ) {
     const requestHeaders = new Headers(request.headers);
     requestHeaders.delete("x-shouzhong-user-id");
     requestHeaders.delete("x-shouzhong-user-email");
