@@ -119,7 +119,10 @@ describe("production contracts", () => {
     expect(proxy.indexOf('request.headers.get("RSC") === "1"')).toBeLessThan(
       proxy.indexOf("createServerClient(url, key"),
     );
-    expect(proxy).toContain('request.nextUrl.searchParams.has("_rsc")');
+    expect(
+      proxy.match(/missing: \[\{ type: "header", key: "rsc", value: "1" \}\]/g),
+    ).toHaveLength(6);
+    expect(proxy).not.toContain('request.nextUrl.searchParams.has("_rsc")');
     expect(proxy).toContain("NextResponse.redirect(loginUrl)");
     expect(proxy).not.toContain("headersWithVerifiedUser");
     expect(layout).toContain("<ClientAppBoundary localOnly={localOnly}>");

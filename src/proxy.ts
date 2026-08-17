@@ -9,10 +9,7 @@ export async function proxy(request: NextRequest) {
     return NextResponse.next({ request });
   }
 
-  if (
-    request.headers.get("RSC") === "1" ||
-    request.nextUrl.searchParams.has("_rsc")
-  ) {
+  if (request.headers.get("RSC") === "1") {
     const requestHeaders = new Headers(request.headers);
     requestHeaders.delete("x-shouzhong-user-id");
     requestHeaders.delete("x-shouzhong-user-email");
@@ -69,11 +66,29 @@ export async function proxy(request: NextRequest) {
 
 export const config = {
   matcher: [
-    "/today/:path*",
-    "/directions/:path*",
-    "/plans/:path*",
-    "/accumulations/:path*",
-    "/reviews/:path*",
-    "/settings/:path*",
+    {
+      source: "/today/:path*",
+      missing: [{ type: "header", key: "rsc", value: "1" }],
+    },
+    {
+      source: "/directions/:path*",
+      missing: [{ type: "header", key: "rsc", value: "1" }],
+    },
+    {
+      source: "/plans/:path*",
+      missing: [{ type: "header", key: "rsc", value: "1" }],
+    },
+    {
+      source: "/accumulations/:path*",
+      missing: [{ type: "header", key: "rsc", value: "1" }],
+    },
+    {
+      source: "/reviews/:path*",
+      missing: [{ type: "header", key: "rsc", value: "1" }],
+    },
+    {
+      source: "/settings/:path*",
+      missing: [{ type: "header", key: "rsc", value: "1" }],
+    },
   ],
 };
