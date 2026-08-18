@@ -4,6 +4,7 @@ import {
   createMcpChallenge,
   getMcpResourceUrl,
 } from "@/lib/mcp/auth";
+import { isLocalE2EMode } from "@/lib/e2e-mode";
 import {
   createE2eMcpRepository,
   createSupabaseMcpRepository,
@@ -99,7 +100,7 @@ async function handleMcp(request: Request) {
     if (!auth && request.method !== "POST") return unauthorized(request);
 
     const repository = auth
-      ? process.env.NEXT_PUBLIC_E2E_MODE === "1"
+      ? isLocalE2EMode(request)
         ? createE2eMcpRepository()
         : createSupabaseMcpRepository(auth.supabase, auth.user.id)
       : null;

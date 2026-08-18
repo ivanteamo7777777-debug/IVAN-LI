@@ -1,10 +1,7 @@
 import { NextResponse } from "next/server";
 import { z } from "zod";
 import { AiUnavailableError, generateStructured } from "@/lib/ai/service";
-import {
-  compactTaskSchema,
-  periodReviewOutputSchema,
-} from "@/lib/ai/schemas";
+import { compactTaskSchema, periodReviewOutputSchema } from "@/lib/ai/schemas";
 import { requireUser } from "@/lib/server-auth";
 
 const inputSchema = z.object({
@@ -20,7 +17,7 @@ const inputSchema = z.object({
 
 export async function POST(request: Request) {
   try {
-    const user = await requireUser();
+    const user = await requireUser(request);
     const input = inputSchema.parse(await request.json());
     const draft = await generateStructured(
       user.id,
@@ -38,7 +35,10 @@ export async function POST(request: Request) {
       return NextResponse.json({ error: error.message }, { status: 503 });
     }
     if (error instanceof z.ZodError) {
-      return NextResponse.json({ error: "请求数据格式不正确" }, { status: 400 });
+      return NextResponse.json(
+        { error: "请求数据格式不正确" },
+        { status: 400 },
+      );
     }
     if (error instanceof Error && error.message === "UNAUTHORIZED") {
       return NextResponse.json({ error: "请先登录" }, { status: 401 });

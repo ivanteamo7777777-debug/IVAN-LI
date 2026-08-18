@@ -2,7 +2,9 @@
 
 import Dexie, { type EntityTable } from "dexie";
 import type {
+  DailyTask,
   DomainRecord,
+  MealLog,
   SyncConflict,
   SyncStatus,
   SyncTable,
@@ -84,6 +86,17 @@ export const localDb = new ShouzhongDatabase();
 
 const recordWriteBarriers = new Map<string, Promise<void>>();
 
+/**
+ * Wait until buffered component commits that have already started reach
+ * IndexedDB. Confirmation flows use this before re-reading records so a blur
+ * commit cannot race a carry-forward or AI draft write.
+ */
+export async function waitForLocalWrites() {
+  while (recordWriteBarriers.size > 0) {
+    await Promise.all([...recordWriteBarriers.values()]);
+  }
+}
+
 async function serializeRecordWrite<T>(
   key: string,
   write: () => Promise<T>,
@@ -115,69 +128,259 @@ export async function listRecords<T extends DomainRecord>(
   return rows.filter((row) => !row.data.deleted_at).map((row) => row.data as T);
 }
 
-async function saveLocalNow<T extends DomainRecord>(
+async function putLocalInTransaction<T extends DomainRecord>(
   table: SyncTable,
   data: T,
+  current: LocalRecord | undefined,
   options: { queue?: boolean; baseVersion?: number } = {},
 ) {
-  const current = await localDb.records.get(`${table}:${data.id}`);
   const now = isoNow();
   const next: T = {
     ...data,
     updated_at: now,
     version: Math.max(data.version ?? 1, (current?.version ?? 0) + 1),
   };
-  await localDb.transaction(
+  await localDb.records.put({
+    key: `${table}:${next.id}`,
+    table,
+    id: next.id,
+    user_id: next.user_id,
+    data: next,
+    version: next.version,
+    updated_at: next.updated_at,
+    sync_status: options.queue === false ? "synced" : "pending",
+  });
+  if (options.queue !== false) {
+    const queued = await localDb.operations
+      .where("record_id")
+      .equals(next.id)
+      .filter(
+        (operation) =>
+          operation.table === table &&
+          operation.user_id === next.user_id &&
+          operation.action === "upsert",
+      )
+      .toArray();
+    if (queued.length) {
+      await localDb.operations.bulkDelete(
+        queued.map((operation) => operation.id),
+      );
+    }
+    await localDb.operations.add({
+      id: newId(),
+      table,
+      record_id: next.id,
+      user_id: next.user_id,
+      action: "upsert",
+      payload: next,
+      base_version: Math.min(
+        options.baseVersion ?? current?.version ?? 0,
+        ...queued.map((operation) => operation.base_version),
+      ),
+      created_at: now,
+      attempts: 0,
+      last_error: null,
+    });
+  }
+  return next;
+}
+
+function requestSync() {
+  window.dispatchEvent(new CustomEvent("shouzhong:sync-request"));
+}
+
+async function saveLocalNow<T extends DomainRecord>(
+  table: SyncTable,
+  data: T,
+  options: { queue?: boolean; baseVersion?: number } = {},
+) {
+  const next = await localDb.transaction(
     "rw",
     localDb.records,
     localDb.operations,
     async () => {
-      await localDb.records.put({
-        key: `${table}:${next.id}`,
-        table,
-        id: next.id,
-        user_id: next.user_id,
-        data: next,
-        version: next.version,
-        updated_at: next.updated_at,
-        sync_status: options.queue === false ? "synced" : "pending",
-      });
-      if (options.queue !== false) {
-        const queued = await localDb.operations
-          .where("record_id")
-          .equals(next.id)
-          .filter(
-            (operation) =>
-              operation.table === table &&
-              operation.user_id === next.user_id &&
-              operation.action === "upsert",
-          )
-          .toArray();
-        if (queued.length) {
-          await localDb.operations.bulkDelete(
-            queued.map((operation) => operation.id),
-          );
-        }
-        await localDb.operations.add({
-          id: newId(),
-          table,
-          record_id: next.id,
-          user_id: next.user_id,
-          action: "upsert",
-          payload: next,
-          base_version: Math.min(
-            options.baseVersion ?? current?.version ?? 0,
-            ...queued.map((operation) => operation.base_version),
-          ),
-          created_at: now,
-          attempts: 0,
-          last_error: null,
-        });
-      }
+      const current = await localDb.records.get(`${table}:${data.id}`);
+      return putLocalInTransaction(table, data, current, options);
     },
   );
-  window.dispatchEvent(new CustomEvent("shouzhong:sync-request"));
+  requestSync();
   return next;
+}
+
+export interface ConditionalLocalWriteResult<T extends DomainRecord> {
+  applied: boolean;
+  record: T | null;
+  reason: "written" | "exists" | "not_empty" | "duplicate";
+}
+
+/**
+ * Insert a deterministic local record only when that exact id is still absent.
+ * The check, record write and outbox update share one serialized Dexie
+ * transaction, so a second tab or a rapid repeated confirmation cannot create
+ * a second logical copy.
+ */
+export async function insertLocalIfAbsent<T extends DomainRecord>(
+  table: SyncTable,
+  data: T,
+): Promise<ConditionalLocalWriteResult<T>> {
+  const key = `${table}:${data.id}`;
+  return serializeRecordWrite(key, async () => {
+    const result = await localDb.transaction(
+      "rw",
+      localDb.records,
+      localDb.operations,
+      async (): Promise<ConditionalLocalWriteResult<T>> => {
+        const current = await localDb.records.get(key);
+        if (current) {
+          return {
+            applied: false,
+            record: current.data as T,
+            reason: "exists",
+          };
+        }
+        const record = await putLocalInTransaction(table, data, undefined);
+        return { applied: true, record, reason: "written" };
+      },
+    );
+    if (result.applied) requestSync();
+    return result;
+  });
+}
+
+function newestLiveRecord<T extends DomainRecord>(rows: LocalRecord[]) {
+  return rows
+    .filter((row) => !row.data.deleted_at)
+    .sort(
+      (left, right) =>
+        right.updated_at.localeCompare(left.updated_at) ||
+        right.id.localeCompare(left.id),
+    )[0] as (LocalRecord & { data: T }) | undefined;
+}
+
+/** Fill only an empty meal content field while preserving every other field. */
+export async function saveMealContentIfEmpty(
+  proposed: MealLog,
+): Promise<ConditionalLocalWriteResult<MealLog>> {
+  const barrierKey = `meal-slot:${proposed.user_id}:${proposed.entry_date}:${proposed.meal_type}`;
+  return serializeRecordWrite(barrierKey, async () => {
+    const result = await localDb.transaction(
+      "rw",
+      localDb.records,
+      localDb.operations,
+      async (): Promise<ConditionalLocalWriteResult<MealLog>> => {
+        const rows = await localDb.records
+          .where("[table+user_id]")
+          .equals(["meal_logs", proposed.user_id])
+          .filter((row) => {
+            const meal = row.data as MealLog;
+            return (
+              meal.entry_date === proposed.entry_date &&
+              meal.meal_type === proposed.meal_type
+            );
+          })
+          .toArray();
+        const latest = newestLiveRecord<MealLog>(rows);
+        if (latest?.data.content.trim()) {
+          return {
+            applied: false,
+            record: latest.data,
+            reason: "not_empty",
+          };
+        }
+        const candidate = latest
+          ? ({ ...latest.data, content: proposed.content } as MealLog)
+          : proposed;
+        const current = await localDb.records.get(`meal_logs:${candidate.id}`);
+        const record = await putLocalInTransaction(
+          "meal_logs",
+          candidate,
+          current,
+        );
+        return { applied: true, record, reason: "written" };
+      },
+    );
+    if (result.applied) requestSync();
+    return result;
+  });
+}
+
+function sameDailyTaskSuggestion(task: DailyTask, patch: Partial<DailyTask>) {
+  return (
+    task.title.trim().toLocaleLowerCase() ===
+    (patch.title ?? "").trim().toLocaleLowerCase()
+  );
+}
+
+/**
+ * Apply one AI suggestion only if the latest record for this natural slot is
+ * still empty and schedulable. Duplicate suggestions already present on the
+ * same date are skipped inside the same transaction.
+ */
+export async function saveDailyTaskSuggestionIfEmpty(
+  fallback: DailyTask,
+  patch: Partial<DailyTask>,
+): Promise<ConditionalLocalWriteResult<DailyTask>> {
+  const barrierKey = `daily-task-slot:${fallback.user_id}:${fallback.entry_date}:${fallback.slot_index}`;
+  return serializeRecordWrite(barrierKey, async () => {
+    const result = await localDb.transaction(
+      "rw",
+      localDb.records,
+      localDb.operations,
+      async (): Promise<ConditionalLocalWriteResult<DailyTask>> => {
+        const rows = await localDb.records
+          .where("[table+user_id]")
+          .equals(["daily_tasks", fallback.user_id])
+          .filter((row) => {
+            const task = row.data as DailyTask;
+            return task.entry_date === fallback.entry_date;
+          })
+          .toArray();
+        const liveRows = rows.filter((row) => !row.data.deleted_at);
+        const duplicate = patch.title?.trim()
+          ? liveRows.find((row) =>
+              sameDailyTaskSuggestion(row.data as DailyTask, patch),
+            )
+          : undefined;
+        if (duplicate) {
+          return {
+            applied: false,
+            record: duplicate.data as DailyTask,
+            reason: "duplicate",
+          };
+        }
+        const latest = newestLiveRecord<DailyTask>(
+          liveRows.filter(
+            (row) => (row.data as DailyTask).slot_index === fallback.slot_index,
+          ),
+        );
+        if (
+          latest &&
+          (latest.data.title.trim() || latest.data.status === "not_scheduled")
+        ) {
+          return {
+            applied: false,
+            record: latest.data,
+            reason: "not_empty",
+          };
+        }
+        const candidate = {
+          ...(latest?.data ?? fallback),
+          ...patch,
+        } as DailyTask;
+        const current = await localDb.records.get(
+          `daily_tasks:${candidate.id}`,
+        );
+        const record = await putLocalInTransaction(
+          "daily_tasks",
+          candidate,
+          current,
+        );
+        return { applied: true, record, reason: "written" };
+      },
+    );
+    if (result.applied) requestSync();
+    return result;
+  });
 }
 
 export async function saveLocal<T extends DomainRecord>(

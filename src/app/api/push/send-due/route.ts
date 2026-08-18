@@ -1,11 +1,16 @@
 import { NextResponse } from "next/server";
+import {
+  createSupabaseDailySixAutoDraftRepository,
+  generateDailySixAutoDraft,
+  isScheduledDraftDue,
+  zonedDateAndMinutes,
+  type DailySixAutoDraftSetting,
+} from "@/lib/ai/daily-six-auto-draft";
 import { createAdminClient } from "@/lib/supabase/admin";
 import { asWebPushSubscription, configureWebPush } from "@/lib/push";
 
-interface ReminderRow {
+interface ReminderRow extends DailySixAutoDraftSetting {
   id: string;
-  user_id: string;
-  time_zone: string;
   daily_six_enabled: boolean;
   daily_six_time: string;
   exercise_enabled: boolean;
@@ -17,27 +22,6 @@ interface ReminderRow {
   last_review_sent: string | null;
 }
 
-function zonedNow(timeZone: string) {
-  const parts = Object.fromEntries(
-    new Intl.DateTimeFormat("en-CA", {
-      timeZone,
-      year: "numeric",
-      month: "2-digit",
-      day: "2-digit",
-      hour: "2-digit",
-      minute: "2-digit",
-      hourCycle: "h23",
-    })
-      .formatToParts(new Date())
-      .filter((part) => part.type !== "literal")
-      .map((part) => [part.type, part.value]),
-  );
-  return {
-    date: `${parts.year}-${parts.month}-${parts.day}`,
-    minutes: Number(parts.hour) * 60 + Number(parts.minute),
-  };
-}
-
 function due(currentMinutes: number, target: string) {
   const [hour, minute] = target.split(":").map(Number);
   const difference = currentMinutes - (hour * 60 + minute);
@@ -46,23 +30,50 @@ function due(currentMinutes: number, target: string) {
 
 async function sendDueReminders(request: Request) {
   const expected = process.env.CRON_SECRET;
-  if (!expected || request.headers.get("authorization") !== `Bearer ${expected}`) {
+  if (
+    !expected ||
+    request.headers.get("authorization") !== `Bearer ${expected}`
+  ) {
     return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
   }
   try {
     const admin = createAdminClient();
-    const webpush = configureWebPush();
+    const autoDraftRepository =
+      createSupabaseDailySixAutoDraftRepository(admin);
+    let webpush: ReturnType<typeof configureWebPush> | null | undefined;
     const { data: settings, error } = await admin
       .from("reminder_settings")
-      .select("*");
+      .select("*")
+      .is("deleted_at", null)
+      .is("archived_at", null);
     if (error) throw error;
     let sent = 0;
     for (const setting of (settings ?? []) as ReminderRow[]) {
-      let local;
-      try {
-        local = zonedNow(setting.time_zone || "Asia/Shanghai");
-      } catch {
-        local = zonedNow("Asia/Shanghai");
+      const now = new Date();
+      const local = zonedDateAndMinutes(
+        now,
+        setting.time_zone || "Asia/Shanghai",
+      );
+
+      if (
+        setting.daily_six_auto_draft_enabled &&
+        setting.daily_six_auto_draft_mode === "scheduled" &&
+        setting.last_daily_six_ai_draft_generated !== local.date &&
+        isScheduledDraftDue(local.minutes, setting.daily_six_auto_draft_time)
+      ) {
+        try {
+          await generateDailySixAutoDraft(
+            {
+              userId: setting.user_id,
+              trigger: "scheduled",
+              setting,
+              now,
+            },
+            { repository: autoDraftRepository },
+          );
+        } catch {
+          // One user's AI or database failure must not block other drafts/pushes.
+        }
       }
       const reminders = [
         {
@@ -104,16 +115,27 @@ async function sendDueReminders(request: Request) {
         const { data: subscriptions } = await admin
           .from("push_subscriptions")
           .select("endpoint,p256dh,auth")
-          .eq("user_id", setting.user_id);
+          .eq("user_id", setting.user_id)
+          .is("deleted_at", null)
+          .is("archived_at", null);
         const payload = JSON.stringify({
           title: reminder.title,
           body: reminder.body,
           url: reminder.url,
           tag: reminder.lastField,
         });
+        if (webpush === undefined) {
+          try {
+            webpush = configureWebPush();
+          } catch {
+            webpush = null;
+          }
+        }
+        if (!webpush) continue;
+        const pushClient = webpush;
         const results = await Promise.allSettled(
           (subscriptions ?? []).map((subscription) =>
-            webpush.sendNotification(
+            pushClient.sendNotification(
               asWebPushSubscription(subscription),
               payload,
             ),

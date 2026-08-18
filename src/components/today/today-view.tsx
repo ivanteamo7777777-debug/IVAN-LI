@@ -1,6 +1,6 @@
 "use client";
 
-import { useMemo, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import { useSearchParams } from "next/navigation";
 import {
   closestCenter,
@@ -21,21 +21,42 @@ import { zhCN } from "date-fns/locale";
 import { CalendarDays, Copy, Sparkles } from "lucide-react";
 import { toast } from "sonner";
 import { useRecords } from "@/hooks/use-records";
-import { deleteLocal, patchLocal, saveLocal } from "@/lib/local-db";
+import {
+  deleteLocal,
+  insertLocalIfAbsent,
+  listRecords,
+  localDb,
+  patchLocal,
+  saveDailyTaskSuggestionIfEmpty,
+  saveLocal,
+  saveMealContentIfEmpty,
+  storeRemote,
+  waitForLocalWrites,
+} from "@/lib/local-db";
 import { localDateKey, isoNow, newId, stableUuid } from "@/lib/utils";
 import type {
   DailyTask,
+  DailyEntry,
+  DailySixDraft,
+  DailySixDraftSuggestion,
   Direction,
   ExerciseLog,
   MealLog,
   MealType,
   Plan,
+  ReminderSetting,
+  Review,
 } from "@/types/domain";
 import { useSync } from "@/components/sync-provider";
 import { PageHeader } from "@/components/page-header";
 import { TaskCard } from "@/components/today/task-card";
 import { ExerciseSection } from "@/components/today/exercise-section";
 import { MealSection } from "@/components/today/meal-section";
+import {
+  carryExerciseFromYesterday,
+  carryMealFromYesterday,
+  dedupeDailySixSuggestions,
+} from "@/components/today/carry-forward";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent } from "@/components/ui/card";
@@ -122,16 +143,26 @@ function emptyMeal(userId: string, date: string, type: MealType): MealLog {
   };
 }
 
-interface AiSuggestion {
-  title: string;
-  importance: string;
-  completion_standard: string;
-  first_action: string;
-  weekly_plan_id: string | null;
+type AiSuggestion = DailySixDraftSuggestion;
+
+interface AutoDraftResponse {
+  status: "ok" | "unavailable" | "error";
+  outcome:
+    | "created"
+    | "existing"
+    | "skipped"
+    | "unavailable"
+    | "failed"
+    | "applied"
+    | "conflict";
+  entry?: DailyEntry;
+  draft?: DailySixDraft;
+  reason?: string;
+  error?: string;
 }
 
 export function TodayView() {
-  const { userId } = useSync();
+  const { userId, localOnly, online, flushNow } = useSync();
   const searchParams = useSearchParams();
   const requestedDate = searchParams.get("date");
   const [date, setDate] = useState(
@@ -144,10 +175,24 @@ export function TodayView() {
   const directions = useRecords<Direction>("directions", userId);
   const exercises = useRecords<ExerciseLog>("exercise_logs", userId);
   const allMeals = useRecords<MealLog>("meal_logs", userId);
+  const dailyEntries = useRecords<DailyEntry>("daily_entries", userId);
+  const reminderSettings = useRecords<ReminderSetting>(
+    "reminder_settings",
+    userId,
+  );
   const [candidateOpen, setCandidateOpen] = useState(false);
   const [aiOpen, setAiOpen] = useState(false);
   const [aiLoading, setAiLoading] = useState(false);
+  const [aiApplying, setAiApplying] = useState(false);
+  const [autoAiLoading, setAutoAiLoading] = useState(false);
   const [aiDraft, setAiDraft] = useState<AiSuggestion[]>([]);
+  const [aiDraftEntry, setAiDraftEntry] = useState<DailyEntry | null>(null);
+  const [selectedAiIndices, setSelectedAiIndices] = useState<Set<number>>(
+    new Set(),
+  );
+  const autoDraftRequests = useRef(new Set<string>());
+  const exerciseCarryInFlight = useRef(false);
+  const mealCarryInFlight = useRef(false);
 
   const todayTasks = useMemo(() => {
     // Structural slots are an in-memory shell until the user edits them. This
@@ -173,6 +218,24 @@ export function TodayView() {
     }
     return [...slots.values()].sort((a, b) => a.slot_index - b.slot_index);
   }, [date, tasks, userId]);
+
+  const currentDailyEntry = useMemo(
+    () =>
+      dailyEntries
+        .filter((entry) => entry.entry_date === date)
+        .sort(
+          (left, right) =>
+            right.updated_at.localeCompare(left.updated_at) ||
+            right.id.localeCompare(left.id),
+        )[0] ?? null,
+    [dailyEntries, date],
+  );
+  const readyAutoDraftEntry =
+    currentDailyEntry?.daily_six_ai_draft_status === "ready" &&
+    currentDailyEntry.daily_six_ai_draft
+      ? currentDailyEntry
+      : null;
+  const autoDraftSetting = reminderSettings[0] ?? null;
 
   const weeklyPlans = useMemo(
     () =>
@@ -230,6 +293,31 @@ export function TodayView() {
     [date, exercises],
   );
 
+  const yesterdayExercises = useMemo(
+    () =>
+      exercises
+        .filter((item) => item.entry_date === yesterday)
+        .sort(
+          (left, right) =>
+            left.created_at.localeCompare(right.created_at) ||
+            left.id.localeCompare(right.id),
+        ),
+    [exercises, yesterday],
+  );
+
+  const yesterdayMeals = useMemo(() => {
+    const result: Partial<Record<MealType, MealLog>> = {};
+    for (const meal of allMeals.filter(
+      (item) => item.entry_date === yesterday,
+    )) {
+      const current = result[meal.meal_type];
+      if (!current || current.updated_at < meal.updated_at) {
+        result[meal.meal_type] = meal;
+      }
+    }
+    return result;
+  }, [allMeals, yesterday]);
+
   const meals = useMemo(() => {
     const result = {} as Record<MealType, MealLog>;
     (["breakfast", "lunch", "dinner", "snack"] as MealType[]).forEach(
@@ -242,6 +330,174 @@ export function TodayView() {
     );
     return result;
   }, [allMeals, date, userId]);
+
+  function openAiDraft(
+    suggestions: AiSuggestion[],
+    entry: DailyEntry | null = null,
+  ) {
+    setAiDraft(suggestions);
+    setAiDraftEntry(entry);
+    setSelectedAiIndices(
+      new Set(suggestions.map((_, suggestionIndex) => suggestionIndex)),
+    );
+    setAiOpen(true);
+  }
+
+  useEffect(() => {
+    if (
+      !online ||
+      date !== localDateKey() ||
+      !autoDraftSetting?.daily_six_auto_draft_enabled ||
+      autoDraftSetting.daily_six_auto_draft_mode !== "first_open" ||
+      currentDailyEntry?.daily_six_ai_draft ||
+      currentDailyEntry?.daily_six_ai_draft_status === "applied"
+    ) {
+      return;
+    }
+
+    const requestKey = `${userId}:${date}:first_open`;
+    if (autoDraftRequests.current.has(requestKey)) return;
+    autoDraftRequests.current.add(requestKey);
+    let active = true;
+    setAutoAiLoading(true);
+
+    void (async () => {
+      try {
+        // Flush recent local plan/setting edits before the server builds the
+        // compact prompt. UI remains available while this runs in background.
+        await flushNow();
+        const response = await fetch("/api/ai/daily-six/auto", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ date }),
+        });
+        const result = (await response.json()) as AutoDraftResponse;
+        if (!response.ok || result.status === "error") {
+          throw new Error(result.error ?? "AI 自动草稿暂时不可用");
+        }
+        if (result.entry?.daily_six_ai_draft) {
+          await storeRemote("daily_entries", result.entry);
+          if (active && result.outcome === "created") {
+            toast.success("今天的 AI 六件事草稿已准备好，可查看后确认");
+          }
+          return;
+        }
+        if (active && result.status === "unavailable") {
+          toast("未配置 OpenAI，自动草稿暂未生成；其他功能不受影响");
+        }
+      } catch {
+        if (active) {
+          toast.error("AI 自动草稿暂未生成；今天的记录仍可正常使用");
+        }
+      } finally {
+        setAutoAiLoading(false);
+      }
+    })();
+
+    return () => {
+      active = false;
+    };
+  }, [
+    autoDraftSetting?.daily_six_auto_draft_enabled,
+    autoDraftSetting?.daily_six_auto_draft_mode,
+    currentDailyEntry?.daily_six_ai_draft,
+    currentDailyEntry?.daily_six_ai_draft_status,
+    date,
+    online,
+    flushNow,
+    userId,
+  ]);
+
+  async function carryYesterdayExercises(selected: ExerciseLog[]) {
+    if (exerciseCarryInFlight.current) return;
+    exerciseCarryInFlight.current = true;
+    try {
+      const selectedIds = new Set(selected.map((value) => value.id));
+      const latestRows = await localDb.records
+        .where("[table+user_id]")
+        .equals(["exercise_logs", userId])
+        .toArray();
+      const latestById = new Map(
+        latestRows
+          .map((row) => row.data as ExerciseLog)
+          .filter(
+            (value) =>
+              !value.deleted_at &&
+              value.entry_date === yesterday &&
+              selectedIds.has(value.id),
+          )
+          .map((value) => [value.id, value]),
+      );
+      let copied = 0;
+      let alreadyCarried = 0;
+      for (const selectedValue of selected) {
+        const source = latestById.get(selectedValue.id);
+        if (!source) continue;
+        const carried = carryExerciseFromYesterday(source, { userId, date });
+        const result = await insertLocalIfAbsent("exercise_logs", carried);
+        if (!result.applied) {
+          alreadyCarried += 1;
+          continue;
+        }
+        copied += 1;
+      }
+      if (copied) toast.success(`已从昨天带入 ${copied} 项运动`);
+      if (alreadyCarried) toast(`其中 ${alreadyCarried} 项今天已经带入过`);
+      if (!copied && !alreadyCarried) {
+        toast.error("所选的昨天运动已发生变化，请重新选择");
+      }
+    } catch {
+      toast.error("运动带入未完成，本地已有记录不会丢失，可稍后重试");
+    } finally {
+      exerciseCarryInFlight.current = false;
+    }
+  }
+
+  async function carryYesterdayMeals(types: MealType[]) {
+    if (mealCarryInFlight.current) return;
+    mealCarryInFlight.current = true;
+    try {
+      const latestRows = await localDb.records
+        .where("[table+user_id]")
+        .equals(["meal_logs", userId])
+        .toArray();
+      const latestMeals: Partial<Record<string, MealLog>> = {};
+      for (const row of latestRows) {
+        const meal = row.data as MealLog;
+        if (meal.deleted_at) continue;
+        const key = `${meal.entry_date}:${meal.meal_type}`;
+        const current = latestMeals[key];
+        if (!current || current.updated_at < meal.updated_at) {
+          latestMeals[key] = meal;
+        }
+      }
+
+      let copied = 0;
+      let refused = 0;
+      for (const type of types) {
+        const source = latestMeals[`${yesterday}:${type}`];
+        if (!source?.content.trim()) continue;
+        const result = await saveMealContentIfEmpty(
+          carryMealFromYesterday(source, { userId, date }),
+        );
+        if (!result.applied) {
+          refused += 1;
+          continue;
+        }
+        copied += 1;
+      }
+      if (copied) toast.success(`已从昨天带入 ${copied} 项饮食文字`);
+      if (refused) {
+        toast.error(
+          `${refused} 项今天已有文字或刚刚发生变化，已跳过且没有覆盖`,
+        );
+      }
+    } catch {
+      toast.error("饮食带入未完成，今天已有内容不会被静默覆盖");
+    } finally {
+      mealCarryInFlight.current = false;
+    }
+  }
 
   const sensors = useSensors(
     useSensor(PointerSensor, { activationConstraint: { distance: 6 } }),
@@ -292,6 +548,16 @@ export function TodayView() {
   async function requestAiDraft() {
     setAiLoading(true);
     try {
+      const reviews = await listRecords<Review>("reviews", userId);
+      const recentReview = reviews
+        .filter(
+          (review) =>
+            review.review_type === "daily" && review.period_end < date,
+        )
+        .sort((left, right) =>
+          right.period_end.localeCompare(left.period_end),
+        )[0];
+      const recentAdjustment = recentReview?.content.tomorrow_adjustment;
       const response = await fetch("/api/ai/daily-six", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
@@ -324,6 +590,16 @@ export function TodayView() {
           existing: todayTasks
             .filter((task) => task.title)
             .map(({ slot_index, title }) => ({ slot_index, title })),
+          yesterday_incomplete: yesterdayCandidates.map(
+            ({ title, importance, completion_standard }) => ({
+              title,
+              importance,
+              completion_standard,
+            }),
+          ),
+          ...(typeof recentAdjustment === "string" && recentAdjustment.trim()
+            ? { recent_adjustment: recentAdjustment }
+            : {}),
         }),
       });
       const result = (await response.json()) as {
@@ -333,8 +609,7 @@ export function TodayView() {
       if (!response.ok || !result.suggestions) {
         throw new Error(result.error ?? "AI 暂时不可用");
       }
-      setAiDraft(result.suggestions);
-      setAiOpen(true);
+      openAiDraft(result.suggestions);
     } catch (error) {
       toast.error(error instanceof Error ? error.message : "AI 暂时不可用");
     } finally {
@@ -342,26 +617,225 @@ export function TodayView() {
     }
   }
 
-  async function applyAiDraft() {
-    const targets = todayTasks.filter(
-      (task) => !task.title || task.status === "not_scheduled",
-    );
-    if (!targets.length) {
-      toast.error("六个位置已有内容；AI 不会自动覆盖");
+  function handleAiButton() {
+    if (readyAutoDraftEntry?.daily_six_ai_draft) {
+      openAiDraft(
+        readyAutoDraftEntry.daily_six_ai_draft.suggestions,
+        readyAutoDraftEntry,
+      );
       return;
     }
-    for (const [index, suggestion] of aiDraft.entries()) {
-      const target = targets[index];
-      if (!target) break;
-      await patchLocal("daily_tasks", target, {
-        ...suggestion,
-        status: "not_started",
-        result: "",
-        completed_at: null,
-      });
+    void requestAiDraft();
+  }
+
+  async function applyAiDraft() {
+    if (aiApplying) return;
+    const selectedSuggestions = dedupeDailySixSuggestions(
+      aiDraft.filter(
+        (suggestion, index) =>
+          selectedAiIndices.has(index) && suggestion.title.trim(),
+      ),
+    );
+    if (!selectedSuggestions.length) {
+      toast.error("请至少选择一条有标题的建议");
+      return;
     }
-    setAiOpen(false);
-    toast.success("已按你的确认写入空余位置");
+
+    setAiApplying(true);
+    try {
+      await waitForLocalWrites();
+      const [latestTasks, latestEntries] = await Promise.all([
+        listRecords<DailyTask>("daily_tasks", userId),
+        aiDraftEntry
+          ? listRecords<DailyEntry>("daily_entries", userId)
+          : Promise.resolve([]),
+      ]);
+      const currentDraftEntry = aiDraftEntry
+        ? (latestEntries.find((entry) => entry.id === aiDraftEntry.id) ??
+          latestEntries.find((entry) => entry.entry_date === date) ??
+          null)
+        : null;
+      if (
+        aiDraftEntry &&
+        (!currentDraftEntry ||
+          currentDraftEntry.daily_six_ai_draft_status !== "ready" ||
+          currentDraftEntry.version !== aiDraftEntry.version)
+      ) {
+        toast.error("AI 草稿已变化，请重新打开后再确认");
+        return;
+      }
+
+      const currentBySlot = new Map<number, DailyTask>();
+      for (const task of latestTasks.filter(
+        (candidate) => candidate.entry_date === date,
+      )) {
+        const existing = currentBySlot.get(task.slot_index);
+        if (!existing || existing.updated_at < task.updated_at) {
+          currentBySlot.set(task.slot_index, task);
+        }
+      }
+      const currentDateTasks = [...currentBySlot.values()];
+      const suggestionKey = (suggestion: AiSuggestion) =>
+        suggestion.title.trim().toLocaleLowerCase();
+      const confirmedTaskIds = new Set<string>();
+      const resolvedSuggestionKeys = new Set<string>();
+      for (const suggestion of selectedSuggestions) {
+        const existingTask = currentDateTasks.find(
+          (task) =>
+            task.title.trim() === suggestion.title.trim() &&
+            task.completion_standard.trim() ===
+              suggestion.completion_standard.trim() &&
+            task.first_action.trim() === suggestion.first_action.trim(),
+        );
+        if (!existingTask) continue;
+        confirmedTaskIds.add(existingTask.id);
+        resolvedSuggestionKeys.add(suggestionKey(suggestion));
+      }
+      const suggestionsToWrite = selectedSuggestions.filter(
+        (suggestion) => !resolvedSuggestionKeys.has(suggestionKey(suggestion)),
+      );
+      const targets = Array.from({ length: 6 }, (_, index) => {
+        const slot = index + 1;
+        return currentBySlot.get(slot) ?? emptyTask(userId, date, slot);
+      }).filter(
+        (task) => !task.title.trim() && task.status !== "not_scheduled",
+      );
+      if (!targets.length && suggestionsToWrite.length) {
+        toast.error("六个位置已有内容或明确标记不安排；AI 不会覆盖");
+        return;
+      }
+
+      let written = 0;
+      let targetIndex = 0;
+      suggestionLoop: for (const suggestion of suggestionsToWrite) {
+        while (targetIndex < targets.length) {
+          const target = targets[targetIndex];
+          targetIndex += 1;
+          const result = await saveDailyTaskSuggestionIfEmpty(target, {
+            ...suggestion,
+            weekly_plan_id:
+              suggestion.weekly_plan_id &&
+              weeklyPlans.some((plan) => plan.id === suggestion.weekly_plan_id)
+                ? suggestion.weekly_plan_id
+                : null,
+            status: "not_started",
+            result: "",
+            completed_at: null,
+          });
+          if (result.applied) {
+            written += 1;
+            if (result.record) confirmedTaskIds.add(result.record.id);
+            resolvedSuggestionKeys.add(suggestionKey(suggestion));
+            continue suggestionLoop;
+          }
+          if (result.reason === "duplicate") {
+            if (result.record) confirmedTaskIds.add(result.record.id);
+            resolvedSuggestionKeys.add(suggestionKey(suggestion));
+            continue suggestionLoop;
+          }
+        }
+        break;
+      }
+      await waitForLocalWrites();
+
+      const unresolvedCount = selectedSuggestions.filter(
+        (suggestion) => !resolvedSuggestionKeys.has(suggestionKey(suggestion)),
+      ).length;
+      if (!confirmedTaskIds.size && suggestionsToWrite.length) {
+        toast.error("空位刚刚发生了变化，AI 没有覆盖你的新输入，请重新确认");
+        return;
+      }
+
+      let markerMessage: string | null =
+        unresolvedCount > 0
+          ? `${unresolvedCount} 条所选建议因空位不足尚未写入；AI 草稿会继续保留`
+          : null;
+      if (currentDraftEntry) {
+        let tasksReadyForMarker = unresolvedCount === 0 && localOnly;
+        if (unresolvedCount === 0 && !tasksReadyForMarker && online) {
+          try {
+            await flushNow();
+          } catch {
+            // The status check below is authoritative; failed rows stay local.
+          }
+          const taskRows = await localDb.records.bulkGet(
+            [...confirmedTaskIds].map((id) => `daily_tasks:${id}`),
+          );
+          tasksReadyForMarker = taskRows.every(
+            (row) => row?.sync_status === "synced",
+          );
+        }
+
+        if (unresolvedCount > 0) {
+          // A partially resolved draft remains ready so the user can make room
+          // and explicitly confirm the remaining suggestions later.
+        } else if (!tasksReadyForMarker) {
+          markerMessage = online
+            ? "部分任务仍在等待同步或需要处理冲突；AI 草稿暂不标记为已应用"
+            : "任务已保存在本机；联网同步完成后可再次打开草稿确认状态";
+        } else {
+          try {
+            const response = await fetch("/api/ai/daily-six/auto", {
+              method: "PATCH",
+              headers: { "Content-Type": "application/json" },
+              body: JSON.stringify({
+                date,
+                expected_version: currentDraftEntry.version,
+              }),
+            });
+            const result = (await response.json()) as AutoDraftResponse;
+            if (response.status === 409 || result.outcome === "conflict") {
+              if (result.entry) {
+                await storeRemote("daily_entries", result.entry);
+              }
+              markerMessage =
+                result.error ?? "AI 草稿版本已变化，请重新打开后确认";
+            } else if (!response.ok || result.outcome !== "applied") {
+              if (result.entry) {
+                await storeRemote("daily_entries", result.entry);
+              }
+              markerMessage = result.error ?? "草稿状态暂未同步";
+            } else if (result.entry) {
+              await storeRemote("daily_entries", result.entry);
+            }
+          } catch {
+            markerMessage =
+              "任务已安全保存；网络恢复后请再次打开草稿完成状态确认";
+          }
+        }
+      }
+
+      if (unresolvedCount > 0) {
+        const unresolvedKeys = new Set(
+          selectedSuggestions
+            .filter(
+              (suggestion) =>
+                !resolvedSuggestionKeys.has(suggestionKey(suggestion)),
+            )
+            .map(suggestionKey),
+        );
+        setSelectedAiIndices(
+          new Set(
+            aiDraft.flatMap((suggestion, index) =>
+              unresolvedKeys.has(suggestionKey(suggestion)) ? [index] : [],
+            ),
+          ),
+        );
+      } else {
+        setAiOpen(false);
+        setAiDraftEntry(null);
+      }
+      if (written) {
+        toast.success(`已按你的确认写入 ${written} 个空余位置`);
+      } else {
+        toast("所选建议已经存在，没有重复写入");
+      }
+      if (markerMessage) toast(markerMessage);
+    } catch {
+      toast.error("AI 建议写入未完成；已有输入仍保存在本机");
+    } finally {
+      setAiApplying(false);
+    }
   }
 
   const completed = todayTasks.filter(
@@ -389,12 +863,16 @@ export function TodayView() {
             <Button
               data-testid="ai-suggest"
               variant="secondary"
-              onClick={() => void requestAiDraft()}
-              disabled={aiLoading}
+              onClick={handleAiButton}
+              disabled={aiLoading || autoAiLoading}
             >
               <Sparkles />
               <span className="hidden sm:inline">
-                {aiLoading ? "生成中…" : "AI 建议"}
+                {aiLoading || autoAiLoading
+                  ? "准备草稿中…"
+                  : readyAutoDraftEntry
+                    ? "查看 AI 草稿"
+                    : "AI 建议"}
               </span>
             </Button>
           </>
@@ -466,9 +944,11 @@ export function TodayView() {
       <div className="mt-9 grid gap-6 xl:grid-cols-2">
         <ExerciseSection
           values={todayExercises}
+          yesterdayValues={yesterdayExercises}
           onAdd={() =>
             void saveLocal("exercise_logs", emptyExercise(userId, date))
           }
+          onCarryForward={carryYesterdayExercises}
           onPatch={(exercise, patch) =>
             void patchLocal("exercise_logs", exercise, patch)
           }
@@ -491,6 +971,8 @@ export function TodayView() {
           userId={userId}
           date={date}
           meals={meals}
+          yesterdayMeals={yesterdayMeals}
+          onCarryForward={carryYesterdayMeals}
           onPatch={(type, patch) => {
             const meal = meals[type];
             if (allMeals.some((item) => item.id === meal.id)) {
@@ -534,7 +1016,7 @@ export function TodayView() {
       </Dialog>
 
       <Dialog open={aiOpen} onOpenChange={setAiOpen}>
-        <DialogContent className="max-w-2xl">
+        <DialogContent className="max-w-2xl" data-testid="ai-draft-dialog">
           <DialogHeader>
             <DialogTitle>AI 六件事建议草稿</DialogTitle>
             <DialogDescription>
@@ -545,9 +1027,36 @@ export function TodayView() {
             {aiDraft.map((suggestion, index) => (
               <div
                 key={index}
-                className="rounded-2xl border border-[var(--line)] bg-[var(--surface)] p-4"
+                className={`rounded-2xl border border-[var(--line)] bg-[var(--surface)] p-4 ${
+                  selectedAiIndices.has(index) ? "" : "opacity-60"
+                }`}
               >
-                <Label>建议 {index + 1}</Label>
+                <div className="mb-2 flex items-center justify-between gap-3">
+                  <label className="flex cursor-pointer items-center gap-2 text-sm font-medium">
+                    <input
+                      type="checkbox"
+                      className="size-4 accent-[var(--accent)]"
+                      checked={selectedAiIndices.has(index)}
+                      onChange={(event) =>
+                        setSelectedAiIndices((current) => {
+                          const next = new Set(current);
+                          if (event.target.checked) next.add(index);
+                          else next.delete(index);
+                          return next;
+                        })
+                      }
+                      aria-label={`使用 AI 建议 ${index + 1}`}
+                    />
+                    建议 {index + 1}
+                  </label>
+                  {suggestion.weekly_plan_id && (
+                    <span className="truncate text-xs text-[var(--muted)]">
+                      {plansById.get(suggestion.weekly_plan_id)?.title ??
+                        "未关联计划"}
+                    </span>
+                  )}
+                </div>
+                <Label>任务标题</Label>
                 <Input
                   value={suggestion.title}
                   onChange={(event) =>
@@ -555,6 +1064,20 @@ export function TodayView() {
                       draft.map((item, itemIndex) =>
                         itemIndex === index
                           ? { ...item, title: event.target.value }
+                          : item,
+                      ),
+                    )
+                  }
+                />
+                <Textarea
+                  className="mt-3"
+                  value={suggestion.importance}
+                  placeholder="为什么重要"
+                  onChange={(event) =>
+                    setAiDraft((draft) =>
+                      draft.map((item, itemIndex) =>
+                        itemIndex === index
+                          ? { ...item, importance: event.target.value }
                           : item,
                       ),
                     )
@@ -598,7 +1121,14 @@ export function TodayView() {
             <Button variant="ghost" onClick={() => setAiOpen(false)}>
               暂不使用
             </Button>
-            <Button onClick={() => void applyAiDraft()}>确认写入空位</Button>
+            <Button
+              onClick={() => void applyAiDraft()}
+              disabled={aiApplying || selectedAiIndices.size === 0}
+            >
+              {aiApplying
+                ? "写入中…"
+                : `确认写入空位（所选 ${selectedAiIndices.size} 项）`}
+            </Button>
           </div>
         </DialogContent>
       </Dialog>

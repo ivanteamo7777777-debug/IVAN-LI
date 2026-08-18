@@ -1,12 +1,13 @@
 import { NextResponse } from "next/server";
+import { isLocalE2EMode } from "@/lib/e2e-mode";
 import { asWebPushSubscription, configureWebPush } from "@/lib/push";
 import { createClient } from "@/lib/supabase/server";
 import { requireUser } from "@/lib/server-auth";
 
-export async function POST() {
+export async function POST(request: Request) {
   try {
-    const user = await requireUser();
-    if (process.env.NEXT_PUBLIC_E2E_MODE === "1") {
+    const user = await requireUser(request);
+    if (isLocalE2EMode(request)) {
       return NextResponse.json({ ok: true });
     }
     const supabase = await createClient();

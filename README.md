@@ -16,7 +16,7 @@
 
 - 方向库：Mission、Vision、Value、人生方向与阶段边界，可排序、归档并关联计划。
 - 计划库：年度、月度、每周计划均可独立存在；月计划可关联年计划，周计划可直接关联年计划或月计划；支持列表、时间视图、筛选、路径、进度与温和逾期提示。
-- 今日执行：每天恰好六个独立编号位置；运动和四类饮食记录完全独立。
+- 今日执行：每天恰好六个独立编号位置；运动和四类饮食记录完全独立。运动可从昨天多选带入计划字段，饮食可按餐次带入昨天的文字；今天已有饮食文字绝不覆盖，昨天的完成事实、图片、饮水、感受与备注也不会复制。
 - 长期积累库：从已完成任务显式收录可复用成果，支持标签、搜索、来源回溯和附件。
 - 复盘库：日、周、月、年度复盘；自动统计只生成可编辑草稿。
 - 离线优先：Dexie/IndexedDB、本地有序操作队列、断网图片队列、自动重连同步。
@@ -60,7 +60,6 @@
 | `CRON_SECRET`                          | 仅服务端      | 保护 `/api/push/send-due`                                           |
 | `NEXT_PUBLIC_SITE_URL`                 | 浏览器/服务端 | 正式域名，例如 `https://example.vercel.app`                         |
 | `APP_URL`                              | 仅服务端      | MCP 受保护资源的正式域名，例如 `https://shouzhong-daily.vercel.app` |
-| `NEXT_PUBLIC_E2E_MODE`                 | 仅自动化测试  | 生产环境不要配置                                                    |
 
 仓库不读取或提交任何真实密钥，客户端代码也不会引用服务端密钥。
 
@@ -71,7 +70,7 @@ pnpm install --frozen-lockfile
 pnpm dev
 ```
 
-打开 `http://localhost:3000`。若 Supabase 变量未配置，会进入设置说明页；自动化测试模式提供隔离的本地测试库，但生产构建禁止开启该模式。
+打开 `http://localhost:3000`。若 Supabase 变量未配置，会进入设置说明页；Playwright 会在本机进程中临时注入仅服务端的 `SHOUZHONG_E2E_MODE=1`，提供隔离测试库。该变量不进入 `.env.example`，且 Vercel 检测到它时会直接拒绝构建。
 
 本地启动完整 Supabase：
 
@@ -107,10 +106,14 @@ pnpm dlx supabase db push
 接口：
 
 - `POST /api/ai/daily-six`
+- `POST /api/ai/daily-six/auto`（仅用户时区当天的首次打开模式）
+- `PATCH /api/ai/daily-six/auto`（用户确认使用后，以 `expected_version` 标记已应用）
 - `POST /api/ai/daily-review`
 - `POST /api/ai/period-review`
 
-请求先验证 Cookie Session，再做 Zod 输入限制，只发送当前草稿所需的数据。结构化输出通过 Responses API 生成，且 `store: false`。AI 结果只进入界面草稿；确认按钮是写入正式数据的唯一入口。
+请求先验证 Cookie Session，再做 Zod 输入限制，只发送当前草稿所需的数据。每日六件事上下文限于方向、当前日期内已启用的计划、当天已有标题、昨天未完成候选的必要字段，以及最近一次复盘的 `tomorrow_adjustment`；不会发送整份复盘、饮食或运动内容。结构化输出通过 Responses API 生成，且 `store: false`。模型返回的计划 ID 会再次与当前用户可见的周计划白名单核对，未知 ID 会被清空。
+
+“每日六件事自动草稿”在设置中默认关闭，可选“每天首次打开今日执行”或“固定时间”。自动输出只保存在 `daily_entries.daily_six_ai_draft`，不会由接口、Cron 或数据库触发器直接写入 `daily_tasks`。已有或用户已编辑的草稿不会被覆盖；确认按钮仍是写入正式任务的唯一入口。只有所选建议全部落入空位且完成同步后，草稿才会标记为 `applied`；空位不足时，未写入建议及用户编辑会继续保留。未配置 `OPENAI_API_KEY` 时自动草稿返回不可用状态，核心记录、同步和提醒不受影响。
 
 ## Web Push
 
@@ -125,6 +128,8 @@ pnpm exec web-push generate-vapid-keys
 Vault 中的 `shouzhong_site_url` 与 `shouzhong_cron_secret` 安全调用
 `/api/push/send-due`。这样也兼容只允许每日一次 Cron 的 Vercel Hobby 方案。
 用户只有主动打开某个提醒开关时，应用才请求通知权限。
+
+同一轮每 15 分钟的 Supabase Cron 也负责检查固定时间 AI 草稿。生成采用数据库条件式抢占：同一天只允许一个任务生成，失败会在一小时的有限窗口内重试，只有草稿成功写入后才更新 `last_daily_six_ai_draft_generated`。Web Push/VAPID 未配置或推送失败不会阻断 AI 草稿，单个用户生成失败也不会影响其他用户。
 
 iPhone/iPad 需要先用 Safari 将应用添加到主屏幕，再从独立应用中开启通知。通知失败只更新订阅状态，不会阻断记录、同步或复盘。
 
@@ -199,11 +204,13 @@ pnpm test:db
 - IndexedDB 操作队列、队列合并、JSON 恢复和冲突保留
 - 六个位置唯一性，以及运动/饮食不占位置
 - AI 未确认不得写入
+- 自动草稿默认关闭、仅当天首次打开、定时幂等与失败重试
+- 自动草稿周计划 ID 白名单、`applied` 防重复和跨用户 RLS
 - Manifest、图标、Service Worker 注册契约
 - 真实浏览器断网重载和离线内容保留
 - 桌面、iPad 和手机响应式导航
 - SQL 约束、索引、RLS 和 Storage 策略目录验证
-- `supabase/tests/database.sql` 中的实际 pgTAP 数据库测试
+- `supabase/tests/` 中的实际 pgTAP 数据库测试（含自动草稿事务与权限）
 
 数据库与 RLS 的集成测试必须在本地 Supabase 或测试项目可用后执行；只做静态 SQL 检查不能替代 `pnpm test:db`。
 
@@ -224,7 +231,7 @@ git push -u origin main
 
 1. Supabase 迁移已全部应用。
 2. Auth Site URL 与回调地址使用正式 HTTPS 域名。
-3. `NEXT_PUBLIC_E2E_MODE` 不存在。
+3. Vercel 不存在任何 E2E 测试变量；`NEXT_PUBLIC_E2E_MODE` 已被源码明确禁止。
 4. VAPID 密钥和 `CRON_SECRET` 已配置。
 5. Vercel 构建、登录、上传、推送测试通知和跨设备同步均通过。
 

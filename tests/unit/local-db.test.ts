@@ -4,11 +4,14 @@ import {
   deleteRemoteIfClean,
   exportAllData,
   getRememberedLocalIdentity,
+  insertLocalIfAbsent,
   localDb,
   patchLocal,
   rememberLocalIdentity,
   restoreAllData,
+  saveDailyTaskSuggestionIfEmpty,
   saveLocal,
+  saveMealContentIfEmpty,
   storeRemote,
   storeRemotePage,
 } from "@/lib/local-db";
@@ -177,6 +180,133 @@ describe("IndexedDB local-first persistence", () => {
     expect((stored?.data as DailyTask).title).toBe("新的标题");
     expect((stored?.data as DailyTask).notes).toBe("新的备注");
     expect((await localDb.operations.toArray())[0].base_version).toBe(0);
+  });
+
+  it("atomically inserts a deterministic exercise carry only once", async () => {
+    const carried: ExerciseLog = {
+      id: "10000000-0000-4000-8000-000000000010",
+      user_id: userId,
+      entry_date: "2026-07-26",
+      planned: true,
+      activity: "晨跑",
+      planned_minutes: 30,
+      actual_minutes: null,
+      intensity: "moderate",
+      status: "not_started",
+      body_feeling: "",
+      notes: "",
+      created_at: now,
+      updated_at: now,
+      version: 0,
+    };
+
+    const results = await Promise.all([
+      insertLocalIfAbsent("exercise_logs", carried),
+      insertLocalIfAbsent("exercise_logs", carried),
+    ]);
+
+    expect(results.filter((result) => result.applied)).toHaveLength(1);
+    expect(
+      await localDb.records
+        .where("[table+user_id]")
+        .equals(["exercise_logs", userId])
+        .count(),
+    ).toBe(1);
+    expect(await localDb.operations.count()).toBe(1);
+  });
+
+  it("fills only empty meal content and never overwrites concurrent typing", async () => {
+    const todayMeal: MealLog = {
+      id: "20000000-0000-4000-8000-000000000010",
+      user_id: userId,
+      entry_date: "2026-07-26",
+      meal_type: "breakfast",
+      content: "",
+      photo_paths: ["today/photo.jpg"],
+      hydration_ml: 700,
+      overall_feeling: "舒适",
+      notes: "保留今天备注",
+      created_at: now,
+      updated_at: now,
+      version: 0,
+    };
+    const saved = await saveLocal("meal_logs", todayMeal);
+    const proposed = {
+      ...todayMeal,
+      id: "20000000-0000-4000-8000-000000000011",
+      content: "昨天早餐",
+      photo_paths: [],
+      hydration_ml: 0,
+      overall_feeling: "",
+      notes: "",
+    };
+
+    const first = await saveMealContentIfEmpty(proposed);
+    expect(first.applied).toBe(true);
+    expect(first.record).toMatchObject({
+      id: saved.id,
+      content: "昨天早餐",
+      photo_paths: ["today/photo.jpg"],
+      hydration_ml: 700,
+      overall_feeling: "舒适",
+      notes: "保留今天备注",
+    });
+
+    await patchLocal("meal_logs", first.record!, { content: "" });
+    await Promise.all([
+      saveMealContentIfEmpty(proposed),
+      patchLocal("meal_logs", first.record!, { content: "用户刚输入的早餐" }),
+    ]);
+    const latest = await localDb.records.get(`meal_logs:${saved.id}`);
+    expect((latest?.data as MealLog).content).toBe("用户刚输入的早餐");
+    expect((latest?.data as MealLog).photo_paths).toEqual(["today/photo.jpg"]);
+
+    const skipped = await saveMealContentIfEmpty(proposed);
+    expect(skipped).toMatchObject({ applied: false, reason: "not_empty" });
+  });
+
+  it("atomically protects AI task slots and deduplicates concurrent suggestions", async () => {
+    const emptyOne = { ...task(1), title: "" };
+    const emptyTwo = { ...task(2), title: "" };
+    const suggestion = {
+      title: "完成周报",
+      completion_standard: "完成可审阅版本",
+      first_action: "打开周报文档",
+      importance: "对齐本周",
+      status: "not_started" as const,
+    };
+
+    const duplicateResults = await Promise.all([
+      saveDailyTaskSuggestionIfEmpty(emptyOne, suggestion),
+      saveDailyTaskSuggestionIfEmpty(emptyTwo, suggestion),
+    ]);
+    expect(duplicateResults.filter((result) => result.applied)).toHaveLength(1);
+
+    const guarded = await saveLocal("daily_tasks", {
+      ...task(3),
+      title: "",
+    });
+    await Promise.all([
+      saveDailyTaskSuggestionIfEmpty(guarded, {
+        ...suggestion,
+        title: "AI 建议",
+      }),
+      patchLocal("daily_tasks", guarded, { title: "用户刚输入的任务" }),
+    ]);
+    const latest = await localDb.records.get(`daily_tasks:${guarded.id}`);
+    expect((latest?.data as DailyTask).title).toBe("用户刚输入的任务");
+
+    const notScheduled = await saveLocal("daily_tasks", {
+      ...task(4),
+      title: "",
+      status: "not_scheduled",
+    });
+    await expect(
+      saveDailyTaskSuggestionIfEmpty(notScheduled, {
+        ...suggestion,
+        title: "不能写入",
+      }),
+    ).resolves.toMatchObject({ applied: false, reason: "not_empty" });
   });
 
   it("stores exercise and meals independently from the six positions", async () => {
@@ -478,6 +608,47 @@ describe("IndexedDB local-first persistence", () => {
 
     expect(calls).toEqual([task(1).id, task(2).id]);
     expect(await localDb.operations.count()).toBe(0);
+  });
+
+  it("lets a confirmation wait for an active flush and its trailing batch", async () => {
+    await saveLocal("daily_tasks", task(1));
+    const engine = new SyncEngine(userId, {} as SupabaseClient);
+    const calls: string[] = [];
+    let releaseFirst: (() => void) | undefined;
+    let firstStarted: (() => void) | undefined;
+    const started = new Promise<void>((resolve) => {
+      firstStarted = resolve;
+    });
+    const release = new Promise<void>((resolve) => {
+      releaseFirst = resolve;
+    });
+    const mutableEngine = engine as unknown as {
+      flushOperation: (operation: SyncOperation) => Promise<void>;
+    };
+    mutableEngine.flushOperation = async (operation) => {
+      calls.push(operation.record_id);
+      if (calls.length === 1) {
+        firstStarted?.();
+        await release;
+      }
+      await localDb.operations.delete(operation.id);
+    };
+
+    const running = engine.flush();
+    await started;
+    await saveLocal("daily_tasks", task(2));
+    let drained = false;
+    const drain = engine.flushAndWait().then(() => {
+      drained = true;
+    });
+    await Promise.resolve();
+    expect(drained).toBe(false);
+
+    releaseFirst?.();
+    await Promise.all([running, drain]);
+
+    expect(drained).toBe(true);
+    expect(calls).toEqual([task(1).id, task(2).id]);
   });
 
   it("creates a conflict when the cloud changed from the preserved base", async () => {

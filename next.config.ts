@@ -1,6 +1,15 @@
 import type { NextConfig } from "next";
 import withSerwistInit from "@serwist/next";
 
+if (process.env.NEXT_PUBLIC_E2E_MODE === "1") {
+  throw new Error(
+    "NEXT_PUBLIC_E2E_MODE is forbidden because it exposes test mode to the browser bundle.",
+  );
+}
+if (process.env.VERCEL === "1" && process.env.SHOUZHONG_E2E_MODE === "1") {
+  throw new Error("SHOUZHONG_E2E_MODE must never be enabled on Vercel.");
+}
+
 const runtimeCacheVersion = (
   process.env.VERCEL_GIT_COMMIT_SHA ??
   process.env.GITHUB_SHA ??

@@ -10,7 +10,7 @@ interface InstallPromptEvent extends Event {
   userChoice: Promise<{ outcome: "accepted" | "dismissed" }>;
 }
 
-export function PwaManager() {
+export function PwaManager({ disabled = false }: { disabled?: boolean }) {
   const updateAccepted = useRef(false);
   const updateToast = useRef<string | number | null>(null);
   const [installPrompt, setInstallPrompt] = useState<InstallPromptEvent | null>(
@@ -19,6 +19,8 @@ export function PwaManager() {
   const [showIos, setShowIos] = useState(false);
 
   useEffect(() => {
+    if (disabled) return;
+
     const onInstall = (event: Event) => {
       event.preventDefault();
       setInstallPrompt(event as InstallPromptEvent);
@@ -101,12 +103,9 @@ export function PwaManager() {
       if (idleHandle !== null) window.cancelIdleCallback(idleHandle);
       if (fallbackHandle !== null) clearTimeout(fallbackHandle);
     };
-  }, []);
+  }, [disabled]);
 
-  if (
-    process.env.NEXT_PUBLIC_E2E_MODE === "1" ||
-    (!installPrompt && !showIos)
-  ) {
+  if (disabled || (!installPrompt && !showIos)) {
     return null;
   }
 

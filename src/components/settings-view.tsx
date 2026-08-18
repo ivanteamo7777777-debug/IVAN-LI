@@ -12,6 +12,7 @@ import {
   RotateCcw,
   Send,
   ShieldCheck,
+  Sparkles,
   Trash2,
   Upload,
 } from "lucide-react";
@@ -26,17 +27,8 @@ import {
   saveLocal,
 } from "@/lib/local-db";
 import { createClient } from "@/lib/supabase/client";
-import {
-  downloadBlob,
-  isoNow,
-  newId,
-  toCsv,
-} from "@/lib/utils";
-import type {
-  DomainRecord,
-  ReminderSetting,
-  SyncTable,
-} from "@/types/domain";
+import { downloadBlob, isoNow, newId, toCsv } from "@/lib/utils";
+import type { DomainRecord, ReminderSetting, SyncTable } from "@/types/domain";
 import { useSync } from "@/components/sync-provider";
 import { PageHeader } from "@/components/page-header";
 import { Badge } from "@/components/ui/badge";
@@ -44,6 +36,13 @@ import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
+import {
+  Select,
+  SelectContent,
+  SelectItem,
+  SelectTrigger,
+  SelectValue,
+} from "@/components/ui/select";
 import { Switch } from "@/components/ui/switch";
 
 function emptyReminder(userId: string): ReminderSetting {
@@ -54,11 +53,15 @@ function emptyReminder(userId: string): ReminderSetting {
     time_zone: "Asia/Shanghai",
     daily_six_enabled: false,
     daily_six_time: "08:00",
+    daily_six_auto_draft_enabled: false,
+    daily_six_auto_draft_mode: "first_open",
+    daily_six_auto_draft_time: "07:30",
     exercise_enabled: false,
     exercise_time: "18:00",
     review_enabled: false,
     review_time: "21:30",
     last_daily_six_sent: null,
+    last_daily_six_ai_draft_generated: null,
     last_exercise_sent: null,
     last_review_sent: null,
     created_at: now,
@@ -78,7 +81,7 @@ function urlBase64ToUint8Array(base64String: string) {
 
 export function SettingsView() {
   const router = useRouter();
-  const { userId, conflictCount, pendingCount } = useSync();
+  const { userId, localOnly, conflictCount, pendingCount } = useSync();
   const importRef = useRef<HTMLInputElement>(null);
   const reminderRows =
     useLiveQuery(
@@ -89,9 +92,11 @@ export function SettingsView() {
           .toArray(),
       [userId],
     ) ?? [];
-  const reminder =
-    (reminderRows[0]?.data as ReminderSetting | undefined) ??
-    emptyReminder(userId);
+  const reminderDefaults = useMemo(() => emptyReminder(userId), [userId]);
+  const storedReminder = reminderRows[0]?.data as ReminderSetting | undefined;
+  const reminder = storedReminder
+    ? { ...reminderDefaults, ...storedReminder }
+    : reminderDefaults;
   const conflicts =
     useLiveQuery(
       () =>
@@ -150,10 +155,7 @@ export function SettingsView() {
   }
 
   async function toggleReminder(
-    field:
-      | "daily_six_enabled"
-      | "exercise_enabled"
-      | "review_enabled",
+    field: "daily_six_enabled" | "exercise_enabled" | "review_enabled",
     enabled: boolean,
   ) {
     try {
@@ -221,7 +223,7 @@ export function SettingsView() {
     ) {
       return;
     }
-    if (process.env.NEXT_PUBLIC_E2E_MODE === "1") {
+    if (localOnly) {
       await clearLocalUserData(userId);
       router.push("/auth/login");
       return;
@@ -237,7 +239,7 @@ export function SettingsView() {
       "此操作会清除账号及全部云端数据，且无法撤销。\n请输入“删除我的全部数据”继续：",
     );
     if (phrase !== "删除我的全部数据") return;
-    if (process.env.NEXT_PUBLIC_E2E_MODE === "1") {
+    if (localOnly) {
       await clearLocalUserData(userId);
       window.location.href = "/auth/login";
       return;
@@ -275,6 +277,83 @@ export function SettingsView() {
 
       <div className="grid gap-6 xl:grid-cols-[1fr_.95fr]">
         <div className="space-y-6">
+          <Card>
+            <CardHeader>
+              <div className="mb-1 flex items-center gap-2 text-[var(--river)]">
+                <Sparkles className="size-4" />
+                <span className="text-xs tracking-[0.16em]">可选 AI 草稿</span>
+              </div>
+              <CardTitle>每日六件事自动草稿</CardTitle>
+            </CardHeader>
+            <CardContent className="space-y-5">
+              <div className="flex items-start gap-4 rounded-xl border border-[var(--line)] p-4">
+                <Switch
+                  checked={reminder.daily_six_auto_draft_enabled}
+                  onCheckedChange={(enabled) =>
+                    void patchReminder({
+                      daily_six_auto_draft_enabled: enabled,
+                    })
+                  }
+                  aria-label="自动准备每日六件事 AI 草稿"
+                />
+                <div className="min-w-0 flex-1">
+                  <p className="text-sm font-medium">自动准备建议草稿</p>
+                  <p className="mt-1 text-xs leading-5 text-[var(--muted-light)]">
+                    默认关闭。AI
+                    只准备草稿，不会直接写入、延期或覆盖每日六件事；必须由你确认后才会使用。
+                  </p>
+                </div>
+              </div>
+
+              {reminder.daily_six_auto_draft_enabled ? (
+                <div className="grid gap-4 rounded-xl border border-[var(--line)] p-4 sm:grid-cols-[1fr_auto]">
+                  <div>
+                    <Label>准备方式</Label>
+                    <Select
+                      value={reminder.daily_six_auto_draft_mode}
+                      onValueChange={(value: "first_open" | "scheduled") =>
+                        void patchReminder({
+                          daily_six_auto_draft_mode: value,
+                        })
+                      }
+                    >
+                      <SelectTrigger aria-label="AI 草稿准备方式">
+                        <SelectValue />
+                      </SelectTrigger>
+                      <SelectContent>
+                        <SelectItem value="first_open">
+                          每天首次打开今日执行时
+                        </SelectItem>
+                        <SelectItem value="scheduled">每天固定时间</SelectItem>
+                      </SelectContent>
+                    </Select>
+                  </div>
+                  {reminder.daily_six_auto_draft_mode === "scheduled" ? (
+                    <div>
+                      <Label htmlFor="daily-six-auto-draft-time">时间</Label>
+                      <Input
+                        id="daily-six-auto-draft-time"
+                        type="time"
+                        value={reminder.daily_six_auto_draft_time}
+                        className="w-32"
+                        onChange={(event) =>
+                          void patchReminder({
+                            daily_six_auto_draft_time: event.target.value,
+                          })
+                        }
+                      />
+                    </div>
+                  ) : null}
+                </div>
+              ) : null}
+
+              <p className="text-xs leading-5 text-[var(--muted-light)]">
+                固定时间使用“每日提醒”中的时区。OpenAI
+                未配置或暂时不可用时，记录、同步和提醒仍可正常使用。
+              </p>
+            </CardContent>
+          </Card>
+
           <Card>
             <CardHeader>
               <div className="mb-1 flex items-center gap-2 text-[var(--river)]">
@@ -343,12 +422,16 @@ export function SettingsView() {
                   />
                 </div>
               ))}
-              <Button variant="secondary" onClick={() => void testNotification()}>
+              <Button
+                variant="secondary"
+                onClick={() => void testNotification()}
+              >
                 <Send />
                 发送测试通知
               </Button>
               <p className="text-xs leading-5 text-[var(--muted-light)]">
-                iPhone/iPad 需要先“添加到主屏幕”，再从独立应用中允许通知。提醒失败不会影响记录与同步。
+                iPhone/iPad
+                需要先“添加到主屏幕”，再从独立应用中允许通知。提醒失败不会影响记录与同步。
               </p>
             </CardContent>
           </Card>
@@ -421,7 +504,10 @@ export function SettingsView() {
               <CardTitle>备份与迁移</CardTitle>
             </CardHeader>
             <CardContent className="space-y-4">
-              <Button className="w-full justify-start" onClick={() => void exportJson()}>
+              <Button
+                className="w-full justify-start"
+                onClick={() => void exportJson()}
+              >
                 <FileJson />
                 导出全部数据为 JSON
               </Button>
@@ -441,8 +527,7 @@ export function SettingsView() {
                 className="w-full justify-start"
                 onClick={() => importRef.current?.click()}
               >
-                <Upload />
-                从 JSON 恢复导入
+                <Upload />从 JSON 恢复导入
               </Button>
               <div>
                 <Label>各模块 CSV</Label>

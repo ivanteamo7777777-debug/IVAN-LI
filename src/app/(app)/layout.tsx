@@ -1,5 +1,6 @@
 import { redirect } from "next/navigation";
 import { ClientAppBoundary } from "@/components/client-app-boundary";
+import { isLocalE2EMode } from "@/lib/e2e-mode";
 import { hasSupabaseEnv } from "@/lib/supabase/config";
 
 export default function AuthenticatedLayout({
@@ -7,7 +8,7 @@ export default function AuthenticatedLayout({
 }: {
   children: React.ReactNode;
 }) {
-  const localOnly = process.env.NEXT_PUBLIC_E2E_MODE === "1";
+  const localOnly = isLocalE2EMode();
   if (!localOnly && !hasSupabaseEnv()) redirect("/setup");
 
   return (

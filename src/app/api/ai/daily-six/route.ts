@@ -1,12 +1,19 @@
 import { NextResponse } from "next/server";
 import { z } from "zod";
 import { AiUnavailableError, generateStructured } from "@/lib/ai/service";
+import { isLocalE2EMode } from "@/lib/e2e-mode";
+import {
+  DAILY_SIX_INSTRUCTIONS,
+  loadVisibleWeeklyPlanIds,
+  normalizeDailySixDraft,
+} from "@/lib/ai/daily-six";
 import {
   compactDirectionSchema,
   compactPlanSchema,
   dailySixOutputSchema,
 } from "@/lib/ai/schemas";
 import { requireUser } from "@/lib/server-auth";
+import { createClient } from "@/lib/supabase/server";
 
 const inputSchema = z.object({
   date: z.iso.date(),
@@ -20,13 +27,25 @@ const inputSchema = z.object({
       }),
     )
     .max(6),
+  yesterday_incomplete: z
+    .array(
+      z.object({
+        title: z.string().max(160),
+        status: z.string().max(30).optional(),
+        importance: z.string().max(800).optional(),
+        completion_standard: z.string().max(800).optional(),
+      }),
+    )
+    .max(6)
+    .optional(),
+  recent_adjustment: z.string().max(1200).optional(),
 });
 
 export async function POST(request: Request) {
   try {
-    const user = await requireUser();
+    const user = await requireUser(request);
     const input = inputSchema.parse(await request.json());
-    if (process.env.NEXT_PUBLIC_E2E_MODE === "1") {
+    if (isLocalE2EMode(request)) {
       return NextResponse.json({
         suggestions: Array.from({ length: 6 }, (_, index) => ({
           title: `AI 建议 ${index + 1}`,
@@ -37,22 +56,32 @@ export async function POST(request: Request) {
         })),
       });
     }
-    const result = await generateStructured(
-      user.id,
-      dailySixOutputSchema,
-      "daily_six_draft",
-      `你是“守中日课”的计划对齐助手。根据用户明确提供的方向、年度/月度/周计划，为指定日期提出恰好六件可执行事项。每件事必须有清晰完成标准和可以立即开始的第一步。优先关联已有周计划 ID，不得编造 ID。已有事项不要重复。输出只是草稿，绝不声称已经写入。使用克制、具体的简体中文。`,
-      input,
+    const client = await createClient();
+    const [result, allowedWeeklyPlanIds] = await Promise.all([
+      generateStructured(
+        user.id,
+        dailySixOutputSchema,
+        "daily_six_draft",
+        DAILY_SIX_INSTRUCTIONS,
+        input,
+      ),
+      loadVisibleWeeklyPlanIds(client, user.id),
+    ]);
+    return NextResponse.json(
+      normalizeDailySixDraft(result, allowedWeeklyPlanIds),
+      {
+        headers: { "Cache-Control": "private, no-store" },
+      },
     );
-    return NextResponse.json(result, {
-      headers: { "Cache-Control": "private, no-store" },
-    });
   } catch (error) {
     if (error instanceof AiUnavailableError) {
       return NextResponse.json({ error: error.message }, { status: 503 });
     }
     if (error instanceof z.ZodError) {
-      return NextResponse.json({ error: "请求数据格式不正确" }, { status: 400 });
+      return NextResponse.json(
+        { error: "请求数据格式不正确" },
+        { status: 400 },
+      );
     }
     if (error instanceof Error && error.message === "UNAUTHORIZED") {
       return NextResponse.json({ error: "请先登录" }, { status: 401 });

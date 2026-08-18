@@ -225,7 +225,7 @@ pnpm test:acceptance:mcp
 - 新迁移已在升级数据库执行，69 项 pgTAP 均通过；CI 会在空数据库重新执行全部迁移。
 - Supabase 公共业务表继续启用并强制执行 RLS。
 - RPC 只授权 `authenticated`，没有向 `anon` 或 `public` 授权。
-- Vercel 未配置 `NEXT_PUBLIC_E2E_MODE`，也没有客户端可见的服务端密钥。
+- Vercel 未配置任何 E2E 测试变量；本地测试只使用不会进入浏览器包的 `SHOUZHONG_E2E_MODE`，且 Vercel 检测到它会拒绝构建。客户端也没有可见的服务端密钥。
 - `tools/list` 能看到 `get_today`、`list_directions`、`update_daily_task`、`batch_update_daily_tasks`、`list_plans`、`get_plan`、`create_plan`、`update_plan`。
 - OAuth 未登录时返回认证挑战，登录后只能读写当前用户数据。
 - 连续写入 1–6、第 6 位置、原子回滚、幂等创建、乐观锁、非法层级、循环引用与跨用户访问测试全部通过。

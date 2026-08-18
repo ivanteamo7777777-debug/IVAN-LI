@@ -38,8 +38,8 @@ jobs:
       - run: pnpm test
       - run: pnpm build
         env:
-          NEXT_PUBLIC_E2E_MODE: "1"
+          SHOUZHONG_E2E_MODE: "1"
       - run: pnpm exec playwright install --with-deps chromium webkit
       - run: pnpm test:e2e --project=desktop --project=ipad --project=mobile
         env:
-          NEXT_PUBLIC_E2E_MODE: "1"
+          SHOUZHONG_E2E_MODE: "1"

@@ -2,6 +2,7 @@ import { redirect } from "next/navigation";
 import Image from "next/image";
 import { hasSupabaseEnv } from "@/lib/supabase/config";
 import { LoginForm } from "@/components/login-form";
+import { isLocalE2EMode } from "@/lib/e2e-mode";
 import { safeInternalPath } from "@/lib/safe-redirect";
 
 export const dynamic = "force-dynamic";
@@ -11,7 +12,8 @@ export default async function LoginPage({
 }: {
   searchParams: Promise<{ next?: string }>;
 }) {
-  if (!hasSupabaseEnv() && process.env.NEXT_PUBLIC_E2E_MODE !== "1") {
+  const localE2e = isLocalE2EMode();
+  if (!hasSupabaseEnv() && !localE2e) {
     redirect("/setup");
   }
   const { next } = await searchParams;
@@ -51,10 +53,7 @@ export default async function LoginPage({
         </p>
       </section>
       <section className="flex items-center justify-center p-5">
-        <LoginForm
-          e2e={process.env.NEXT_PUBLIC_E2E_MODE === "1"}
-          nextPath={nextPath}
-        />
+        <LoginForm e2e={localE2e} nextPath={nextPath} />
       </section>
     </main>
   );

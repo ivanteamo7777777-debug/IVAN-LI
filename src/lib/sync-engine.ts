@@ -279,6 +279,8 @@ export class SyncEngine {
   private userId: string;
   private channel?: RealtimeChannel;
   private flushing = false;
+  private flushCompletion: Promise<void> | null = null;
+  private resolveFlushCompletion: (() => void) | null = null;
   private flushRequested = false;
   private hydratePromise: Promise<void> | null = null;
   private refreshPromise: Promise<void> | null = null;
@@ -423,6 +425,9 @@ export class SyncEngine {
       return;
     }
     this.flushing = true;
+    this.flushCompletion = new Promise<void>((resolve) => {
+      this.resolveFlushCompletion = resolve;
+    });
     try {
       do {
         this.flushRequested = false;
@@ -430,7 +435,25 @@ export class SyncEngine {
       } while (this.flushRequested && navigator.onLine && !this.destroyed);
     } finally {
       this.flushing = false;
+      this.resolveFlushCompletion?.();
+      this.resolveFlushCompletion = null;
+      this.flushCompletion = null;
     }
+  }
+
+  /**
+   * Drain the current outbox batch and any trailing batch requested while it
+   * was running. Unlike flush(), callers may safely await an already-active
+   * flush without changing the legacy re-entrant behavior used by the engine.
+   */
+  async flushAndWait() {
+    if (!navigator.onLine || this.destroyed) return;
+    if (this.flushing) {
+      this.flushRequested = true;
+      await this.flushCompletion;
+      return;
+    }
+    await this.flush();
   }
 
   private async flushBatch() {

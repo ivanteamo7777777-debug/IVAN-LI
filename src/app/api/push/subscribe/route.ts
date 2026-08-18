@@ -1,5 +1,6 @@
 import { NextResponse } from "next/server";
 import { z } from "zod";
+import { isLocalE2EMode } from "@/lib/e2e-mode";
 import { createClient } from "@/lib/supabase/server";
 import { requireUser } from "@/lib/server-auth";
 
@@ -13,8 +14,8 @@ const subscriptionSchema = z.object({
 
 export async function POST(request: Request) {
   try {
-    const user = await requireUser();
-    if (process.env.NEXT_PUBLIC_E2E_MODE === "1") {
+    const user = await requireUser(request);
+    if (isLocalE2EMode(request)) {
       return NextResponse.json({ ok: true });
     }
     const subscription = subscriptionSchema.parse(await request.json());
@@ -35,7 +36,10 @@ export async function POST(request: Request) {
     return NextResponse.json({ ok: true });
   } catch (error) {
     if (error instanceof z.ZodError) {
-      return NextResponse.json({ error: "通知订阅格式不正确" }, { status: 400 });
+      return NextResponse.json(
+        { error: "通知订阅格式不正确" },
+        { status: 400 },
+      );
     }
     if (error instanceof Error && error.message === "UNAUTHORIZED") {
       return NextResponse.json({ error: "请先登录" }, { status: 401 });

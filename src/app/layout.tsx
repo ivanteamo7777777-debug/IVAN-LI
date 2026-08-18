@@ -1,6 +1,7 @@
 import type { Metadata, Viewport } from "next";
 import { Toaster } from "sonner";
 import { PwaManager } from "@/components/pwa-manager";
+import { isLocalE2EMode } from "@/lib/e2e-mode";
 import "./globals.css";
 
 export const metadata: Metadata = {
@@ -36,11 +37,12 @@ export const viewport: Viewport = {
 export default function RootLayout({
   children,
 }: Readonly<{ children: React.ReactNode }>) {
+  const localOnly = isLocalE2EMode();
   return (
     <html lang="zh-CN" suppressHydrationWarning>
       <body>
         {children}
-        <PwaManager />
+        <PwaManager disabled={localOnly} />
         <Toaster
           position="top-center"
           toastOptions={{

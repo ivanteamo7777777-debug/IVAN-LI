@@ -23,6 +23,20 @@ export type TaskStatus =
 
 export type ReviewType = "daily" | "weekly" | "monthly" | "annual";
 
+export type DailySixAutoDraftMode = "first_open" | "scheduled";
+
+export interface DailySixDraftSuggestion {
+  title: string;
+  importance: string;
+  completion_standard: string;
+  first_action: string;
+  weekly_plan_id: string | null;
+}
+
+export interface DailySixDraft {
+  suggestions: DailySixDraftSuggestion[];
+}
+
 export interface BaseRecord {
   id: string;
   user_id: string;
@@ -59,6 +73,16 @@ export interface Plan extends BaseRecord {
 export interface DailyEntry extends BaseRecord {
   entry_date: string;
   note: string;
+  daily_six_ai_draft: DailySixDraft | null;
+  daily_six_ai_draft_status:
+    "idle" | "generating" | "ready" | "applied" | "failed";
+  daily_six_ai_draft_trigger: DailySixAutoDraftMode | null;
+  daily_six_ai_draft_generated_at: string | null;
+  daily_six_ai_draft_applied_at: string | null;
+  daily_six_ai_draft_claim_id: string | null;
+  daily_six_ai_draft_claimed_at: string | null;
+  daily_six_ai_draft_last_attempt_at: string | null;
+  daily_six_ai_draft_last_error_code: string | null;
 }
 
 export interface DailyTask extends BaseRecord {
@@ -124,11 +148,15 @@ export interface ReminderSetting extends BaseRecord {
   time_zone: string;
   daily_six_enabled: boolean;
   daily_six_time: string;
+  daily_six_auto_draft_enabled: boolean;
+  daily_six_auto_draft_mode: DailySixAutoDraftMode;
+  daily_six_auto_draft_time: string;
   exercise_enabled: boolean;
   exercise_time: string;
   review_enabled: boolean;
   review_time: string;
   last_daily_six_sent: string | null;
+  last_daily_six_ai_draft_generated: string | null;
   last_exercise_sent: string | null;
   last_review_sent: string | null;
 }

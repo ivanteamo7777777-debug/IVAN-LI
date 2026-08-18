@@ -3,6 +3,7 @@ import {
   type SupabaseClient,
   type User,
 } from "@supabase/supabase-js";
+import { isLocalE2EMode } from "@/lib/e2e-mode";
 import { requireSupabaseEnv } from "@/lib/supabase/config";
 
 const MCP_SCOPES = ["openid", "email", "profile"] as const;
@@ -28,11 +29,11 @@ export function getMcpResourceUrl(requestUrl: string) {
   return `${origin}/mcp`;
 }
 
-export function getSupabaseOAuthIssuer() {
-  if (
-    process.env.NEXT_PUBLIC_E2E_MODE === "1" &&
-    !process.env.NEXT_PUBLIC_SUPABASE_URL
-  ) {
+export function getSupabaseOAuthIssuer(requestUrl?: string) {
+  const localE2e = requestUrl
+    ? isLocalE2EMode(new Request(requestUrl))
+    : isLocalE2EMode();
+  if (localE2e && !process.env.NEXT_PUBLIC_SUPABASE_URL) {
     return "https://e2e-project.supabase.co/auth/v1";
   }
   const { url } = requireSupabaseEnv();
@@ -43,7 +44,7 @@ export function getProtectedResourceMetadata(requestUrl: string) {
   const resource = getMcpResourceUrl(requestUrl);
   return {
     resource,
-    authorization_servers: [getSupabaseOAuthIssuer()],
+    authorization_servers: [getSupabaseOAuthIssuer(requestUrl)],
     scopes_supported: [...MCP_SCOPES],
     bearer_methods_supported: ["header"],
     resource_documentation: `${new URL(resource).origin}/settings`,
@@ -61,10 +62,7 @@ export async function authenticateMcpRequest(
   const accessToken = extractBearerToken(request.headers.get("authorization"));
   if (!accessToken) return null;
 
-  if (
-    process.env.NEXT_PUBLIC_E2E_MODE === "1" &&
-    accessToken === "e2e-mcp-token"
-  ) {
+  if (isLocalE2EMode(request) && accessToken === "e2e-mcp-token") {
     return {
       accessToken,
       user: {

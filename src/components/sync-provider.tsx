@@ -18,11 +18,13 @@ import type { DailyTask } from "@/types/domain";
 
 interface SyncContextValue {
   userId: string;
+  localOnly: boolean;
   online: boolean;
   hydrated: boolean;
   status: "synced" | "pending" | "failed" | "conflict";
   pendingCount: number;
   conflictCount: number;
+  flushNow: () => Promise<void>;
   syncNow: () => Promise<void>;
 }
 
@@ -98,14 +100,22 @@ export function SyncProvider({
     [userId],
   );
 
-  const flushPending = useCallback(async () => {
+  const flushNow = useCallback(async () => {
     if (localOnly || !engine.current || !navigator.onLine) return;
+    if (syncTimer.current !== null) {
+      clearTimeout(syncTimer.current);
+      syncTimer.current = null;
+    }
+    await engine.current.flushAndWait();
+  }, [localOnly]);
+
+  const flushPending = useCallback(async () => {
     try {
-      await engine.current.flush();
+      await flushNow();
     } catch {
       toast.error("待同步记录暂时未发送，本地内容已经保留");
     }
-  }, [localOnly]);
+  }, [flushNow]);
 
   const syncNow = useCallback(async () => {
     if (localOnly || !engine.current || !navigator.onLine) return;
@@ -237,6 +247,7 @@ export function SyncProvider({
   const value = useMemo<SyncContextValue>(
     () => ({
       userId,
+      localOnly,
       online,
       hydrated,
       status: conflictCount
@@ -249,12 +260,15 @@ export function SyncProvider({
             : "synced",
       pendingCount,
       conflictCount,
+      flushNow,
       syncNow,
     }),
     [
       conflictCount,
       fileSyncCounts.failed,
+      flushNow,
       hydrated,
+      localOnly,
       online,
       pendingCount,
       recordSyncCounts.failed,

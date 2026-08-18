@@ -1,11 +1,12 @@
 import { createServerClient } from "@supabase/ssr";
 import type { CookieOptions } from "@supabase/ssr";
 import { type NextRequest, NextResponse } from "next/server";
+import { isLocalE2EMode } from "@/lib/e2e-mode";
 import { getAuthCookieOptions } from "@/lib/supabase/auth-cookie";
 import { hasSupabaseEnv, requireSupabaseEnv } from "@/lib/supabase/config";
 
 export async function proxy(request: NextRequest) {
-  if (!hasSupabaseEnv() || process.env.NEXT_PUBLIC_E2E_MODE === "1") {
+  if (!hasSupabaseEnv() || isLocalE2EMode(request)) {
     return NextResponse.next({ request });
   }
 
