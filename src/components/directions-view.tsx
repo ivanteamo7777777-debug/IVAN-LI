@@ -227,9 +227,13 @@ export function DirectionsView() {
                     <Button
                       size="icon"
                       variant="ghost"
-                      className="size-8 text-red-700"
+                      className="size-8 text-[var(--danger)]"
                       onClick={() => {
-                        if (window.confirm("将此方向移入回收站？相关计划不会删除。")) {
+                        if (
+                          window.confirm(
+                            "将此方向移入回收站？相关计划不会删除。",
+                          )
+                        ) {
                           void deleteLocal("directions", direction);
                         }
                       }}
@@ -296,12 +300,19 @@ export function DirectionsView() {
                 className="min-h-40"
                 value={form.content}
                 onChange={(event) =>
-                  setForm((value) => ({ ...value, content: event.target.value }))
+                  setForm((value) => ({
+                    ...value,
+                    content: event.target.value,
+                  }))
                 }
               />
             </div>
             <div className="flex justify-end gap-2">
-              <Button type="button" variant="ghost" onClick={() => setOpen(false)}>
+              <Button
+                type="button"
+                variant="ghost"
+                onClick={() => setOpen(false)}
+              >
                 取消
               </Button>
               <Button type="submit">保存</Button>

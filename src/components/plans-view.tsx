@@ -368,7 +368,7 @@ export function PlansView() {
                         <Button
                           size="icon"
                           variant="ghost"
-                          className="size-8 text-red-700"
+                          className="size-8 text-[var(--danger)]"
                           onClick={() => {
                             if (
                               window.confirm(

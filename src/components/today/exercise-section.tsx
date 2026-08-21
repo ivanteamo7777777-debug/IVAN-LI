@@ -167,7 +167,7 @@ export function ExerciseSection({
                     type="button"
                     variant="ghost"
                     size="icon"
-                    className="size-8 text-[var(--muted-light)] hover:text-red-700"
+                    className="size-8 text-[var(--muted-light)] hover:text-[var(--danger)]"
                     onClick={() => onDelete(value)}
                     aria-label={`删除运动 ${index + 1}`}
                   >

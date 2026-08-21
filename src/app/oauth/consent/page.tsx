@@ -71,7 +71,7 @@ export default async function OAuthConsentPage({
 
   return (
     <main className="paper-grid flex min-h-dvh items-center justify-center p-5">
-      <Card className="w-full max-w-xl bg-[rgba(251,250,246,.96)]">
+      <Card className="w-full max-w-xl bg-[var(--shell-surface)]">
         <CardHeader className="p-7 pb-4">
           <div className="mb-5 flex size-12 items-center justify-center rounded-2xl border border-[var(--line)] bg-[var(--surface-strong)]">
             <Bot className="size-5" aria-hidden="true" />

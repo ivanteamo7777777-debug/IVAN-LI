@@ -120,7 +120,7 @@ export function LoginForm({
   }
 
   return (
-    <Card className="w-full max-w-md bg-[rgba(251,250,246,.92)]">
+    <Card className="w-full max-w-md bg-[var(--shell-surface)]">
       <CardHeader className="p-7 pb-4">
         <div className="mb-6 flex items-center gap-3 lg:hidden">
           <Image

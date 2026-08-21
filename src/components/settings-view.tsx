@@ -31,6 +31,7 @@ import { downloadBlob, isoNow, newId, toCsv } from "@/lib/utils";
 import type { DomainRecord, ReminderSetting, SyncTable } from "@/types/domain";
 import { useSync } from "@/components/sync-provider";
 import { PageHeader } from "@/components/page-header";
+import { ThemePreferenceCard } from "@/components/theme-controls";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
@@ -277,6 +278,7 @@ export function SettingsView() {
 
       <div className="grid gap-6 xl:grid-cols-[1fr_.95fr]">
         <div className="space-y-6">
+          <ThemePreferenceCard />
           <Card>
             <CardHeader>
               <div className="mb-1 flex items-center gap-2 text-[var(--river)]">
@@ -450,7 +452,7 @@ export function SettingsView() {
                   {conflicts.map((conflict) => (
                     <div
                       key={conflict.id}
-                      className="rounded-xl border border-amber-300/60 bg-amber-50/60 p-4"
+                      className="rounded-xl border border-[var(--warning-line)] bg-[var(--warning-wash)] p-4"
                     >
                       <div className="flex items-center gap-2">
                         <Badge>{conflict.table_name}</Badge>

@@ -15,11 +15,7 @@ import { useRecords } from "@/hooks/use-records";
 import { deleteLocal, patchLocal, saveLocal } from "@/lib/local-db";
 import { queueFileUpload } from "@/lib/sync-engine";
 import { isoNow, localDateKey, newId } from "@/lib/utils";
-import type {
-  AccumulationEntry,
-  DailyTask,
-  Plan,
-} from "@/types/domain";
+import type { AccumulationEntry, DailyTask, Plan } from "@/types/domain";
 import { useSync } from "@/components/sync-provider";
 import { PageHeader } from "@/components/page-header";
 import { Badge } from "@/components/ui/badge";
@@ -50,10 +46,7 @@ const blankForm = {
 
 export function AccumulationsView() {
   const { userId } = useSync();
-  const entries = useRecords<AccumulationEntry>(
-    "accumulation_entries",
-    userId,
-  );
+  const entries = useRecords<AccumulationEntry>("accumulation_entries", userId);
   const tasks = useRecords<DailyTask>("daily_tasks", userId);
   const plans = useRecords<Plan>("plans", userId);
   const [query, setQuery] = useState("");
@@ -118,7 +111,11 @@ export function AccumulationsView() {
   }
 
   async function addAttachment(file: File) {
-    const suffix = file.name.split(".").pop()?.replace(/[^a-z0-9]/gi, "") || "bin";
+    const suffix =
+      file.name
+        .split(".")
+        .pop()
+        ?.replace(/[^a-z0-9]/gi, "") || "bin";
     const path = `${userId}/${form.entry_date}/${newId()}.${suffix}`;
     await queueFileUpload({
       userId,
@@ -247,7 +244,7 @@ export function AccumulationsView() {
                   <Button
                     size="icon"
                     variant="ghost"
-                    className="size-8 text-red-700"
+                    className="size-8 text-[var(--danger)]"
                     onClick={() => {
                       if (window.confirm("将此积累条目移入回收站？")) {
                         void deleteLocal("accumulation_entries", entry);
@@ -370,7 +367,10 @@ export function AccumulationsView() {
                 className="min-h-36"
                 value={form.content}
                 onChange={(event) =>
-                  setForm((value) => ({ ...value, content: event.target.value }))
+                  setForm((value) => ({
+                    ...value,
+                    content: event.target.value,
+                  }))
                 }
               />
             </div>
@@ -420,7 +420,11 @@ export function AccumulationsView() {
               )}
             </div>
             <div className="flex justify-end gap-2 sm:col-span-2">
-              <Button type="button" variant="ghost" onClick={() => setOpen(false)}>
+              <Button
+                type="button"
+                variant="ghost"
+                onClick={() => setOpen(false)}
+              >
                 取消
               </Button>
               <Button type="submit">确认保存</Button>

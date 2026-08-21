@@ -1,6 +1,7 @@
 @import "tailwindcss";
 
 :root {
+  color-scheme: light;
   --paper: #f7f5ef;
   --surface: #fbfaf6;
   --surface-strong: #f0eee6;
@@ -16,8 +17,57 @@
   --river: #7b9296;
   --warm: #9a785b;
   --ring: #768d7c;
+  --on-accent: #ffffff;
+  --danger: #b42318;
+  --danger-wash: #fef3f2;
+  --danger-line: #fecdca;
+  --warning: #8a5a12;
+  --warning-wash: #fffaeb;
+  --warning-line: #fedf89;
+  --switch-thumb: #ffffff;
+  --overlay: rgba(26, 31, 27, 0.36);
+  --shell-paper: rgba(247, 245, 239, 0.92);
+  --shell-header: rgba(247, 245, 239, 0.86);
+  --shell-surface: rgba(251, 250, 246, 0.96);
+  --body-glow: rgba(123, 146, 150, 0.08);
+  --grid-line: rgba(85, 113, 94, 0.035);
+  --grid-line-soft: rgba(85, 113, 94, 0.025);
   --background: var(--paper);
   --foreground: var(--ink);
+}
+
+html[data-theme="dark"] {
+  color-scheme: dark;
+  --paper: #121713;
+  --surface: #1b211c;
+  --surface-strong: #252d27;
+  --ink: #e7ece8;
+  --ink-soft: #cad5cd;
+  --muted: #aab6ad;
+  --muted-light: #8f9a92;
+  --line: #344039;
+  --line-strong: #465249;
+  --accent: #8fb49b;
+  --accent-deep: #b9d2c0;
+  --accent-wash: #223029;
+  --river: #8eb0b6;
+  --warm: #d0a27b;
+  --ring: #9bbca4;
+  --on-accent: #102017;
+  --danger: #ffb4ab;
+  --danger-wash: #3a1e1c;
+  --danger-line: #693731;
+  --warning: #efc17d;
+  --warning-wash: #352817;
+  --warning-line: #67502a;
+  --switch-thumb: #e7ece8;
+  --overlay: rgba(0, 0, 0, 0.58);
+  --shell-paper: rgba(18, 23, 19, 0.92);
+  --shell-header: rgba(18, 23, 19, 0.88);
+  --shell-surface: rgba(27, 33, 28, 0.96);
+  --body-glow: rgba(142, 176, 182, 0.08);
+  --grid-line: rgba(143, 180, 155, 0.045);
+  --grid-line-soft: rgba(143, 180, 155, 0.03);
 }
 
 @theme inline {
@@ -40,11 +90,7 @@ html {
 body {
   min-height: 100dvh;
   background:
-    radial-gradient(
-      circle at 90% 4%,
-      rgba(123, 146, 150, 0.08),
-      transparent 25rem
-    ),
+    radial-gradient(circle at 90% 4%, var(--body-glow), transparent 25rem),
     var(--paper);
   color: var(--ink);
   font-family:
@@ -77,8 +123,8 @@ select {
 
 .paper-grid {
   background-image:
-    linear-gradient(rgba(85, 113, 94, 0.035) 1px, transparent 1px),
-    linear-gradient(90deg, rgba(85, 113, 94, 0.025) 1px, transparent 1px);
+    linear-gradient(var(--grid-line) 1px, transparent 1px),
+    linear-gradient(90deg, var(--grid-line-soft) 1px, transparent 1px);
   background-size: 32px 32px;
 }
 

@@ -322,7 +322,7 @@ export function MealSection({
                       <span className="flex items-center gap-2 text-sm font-medium">
                         {mealLabels[type]}
                         {hasTodayContent && hasYesterdayContent && (
-                          <span className="text-xs font-normal text-amber-700">
+                          <span className="text-xs font-normal text-[var(--warning)]">
                             今天已有文字，不会覆盖
                           </span>
                         )}
@@ -339,7 +339,7 @@ export function MealSection({
             })}
           </div>
           {hasUnavailableSelection && (
-            <p className="mt-3 text-xs text-amber-700" role="alert">
+            <p className="mt-3 text-xs text-[var(--warning)]" role="alert">
               选择期间今天的文字已发生变化，本次不会覆盖；请重新选择。
             </p>
           )}

@@ -18,6 +18,7 @@ import {
 } from "lucide-react";
 import { cn } from "@/lib/utils";
 import { useSync } from "@/components/sync-provider";
+import { ThemeQuickToggle } from "@/components/theme-controls";
 import { Button } from "@/components/ui/button";
 
 const navItems = [
@@ -55,12 +56,12 @@ const statusMeta = {
   failed: {
     text: "同步失败",
     icon: CloudOff,
-    className: "text-red-700",
+    className: "text-[var(--danger)]",
   },
   conflict: {
     text: "需要处理冲突",
     icon: CircleAlert,
-    className: "text-amber-700",
+    className: "text-[var(--warning)]",
   },
 };
 
@@ -98,7 +99,7 @@ export function AppShell({
 
   return (
     <div className="min-h-dvh md:grid md:grid-cols-[16.5rem_1fr]">
-      <aside className="fixed inset-y-0 left-0 z-30 hidden w-[16.5rem] flex-col border-r border-[var(--line)] bg-[rgba(247,245,239,.92)] p-5 backdrop-blur md:flex">
+      <aside className="fixed inset-y-0 left-0 z-30 hidden w-[16.5rem] flex-col border-r border-[var(--line)] bg-[var(--shell-paper)] p-5 backdrop-blur md:flex">
         <Link
           href="/today"
           prefetch={false}
@@ -165,6 +166,7 @@ export function AppShell({
               {email}
             </p>
           </div>
+          <ThemeQuickToggle />
           <Button asChild variant="ghost" className="w-full justify-start">
             <Link
               href="/settings"
@@ -181,7 +183,7 @@ export function AppShell({
       </aside>
 
       <div className="min-w-0 md:col-start-2">
-        <header className="sticky top-0 z-20 flex h-14 items-center justify-between border-b border-[var(--line)] bg-[rgba(247,245,239,.86)] px-4 backdrop-blur md:hidden">
+        <header className="sticky top-0 z-20 flex h-14 items-center justify-between border-b border-[var(--line)] bg-[var(--shell-header)] px-4 backdrop-blur md:hidden">
           <Link
             href="/today"
             prefetch={false}
@@ -199,24 +201,30 @@ export function AppShell({
             />
             <span className="font-serif font-semibold">守中日课</span>
           </Link>
-          <Link
-            href={status === "conflict" ? "/settings#conflicts" : "/settings"}
-            prefetch={false}
-            onPointerEnter={() => warmRoute("/settings")}
-            onFocus={() => warmRoute("/settings")}
-            onTouchStart={() => warmRoute("/settings")}
-            aria-label={currentStatus.text}
-            className={currentStatus.className}
-          >
-            <currentStatus.icon className="size-5" />
-          </Link>
+          <div className="flex items-center gap-1">
+            <ThemeQuickToggle compact />
+            <Link
+              href={status === "conflict" ? "/settings#conflicts" : "/settings"}
+              prefetch={false}
+              onPointerEnter={() => warmRoute("/settings")}
+              onFocus={() => warmRoute("/settings")}
+              onTouchStart={() => warmRoute("/settings")}
+              aria-label={currentStatus.text}
+              className={cn(
+                "flex size-10 items-center justify-center rounded-xl",
+                currentStatus.className,
+              )}
+            >
+              <currentStatus.icon className="size-5" />
+            </Link>
+          </div>
         </header>
         <main className="mx-auto w-full max-w-[1180px] px-4 pb-28 pt-6 sm:px-6 md:px-8 md:pb-12 md:pt-8">
           {children}
         </main>
       </div>
 
-      <nav className="safe-bottom fixed inset-x-0 bottom-0 z-30 grid grid-cols-5 border-t border-[var(--line)] bg-[rgba(251,250,246,.96)] px-1 pt-1.5 backdrop-blur md:hidden">
+      <nav className="safe-bottom fixed inset-x-0 bottom-0 z-30 grid grid-cols-5 border-t border-[var(--line)] bg-[var(--shell-surface)] px-1 pt-1.5 backdrop-blur md:hidden">
         {navItems.map((item) => {
           const active = pathname.startsWith(item.href);
           return (
